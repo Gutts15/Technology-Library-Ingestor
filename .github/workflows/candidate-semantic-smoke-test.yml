@@ -23,7 +23,6 @@ on:
       - "src/curation_handoff.py"
       - "src/link_bridge.py"
       - "src/text_document_bridge.py"
-      - "scripts/run-local-candidate-benchmark.ps1"
       - "tests/test_candidate_source_probe_github.py"
       - "tests/test_candidate_split_plan.py"
       - "tests/test_candidate_quality_benchmark.py"
@@ -219,22 +218,6 @@ jobs:
 
       - name: Validate exact video bridge selection
         run: python3 tests/test_rclone_bridge_selection.py
-
-      - name: Validate Windows local benchmark wrapper syntax
-        shell: pwsh
-        run: |
-          $tokens = $null
-          $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-            "scripts/run-local-candidate-benchmark.ps1",
-            [ref]$tokens,
-            [ref]$errors
-          )
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            exit 1
-          }
-          Write-Host "local_candidate_benchmark_powershell_syntax_ok"
 
       - name: Verify clean workspace
         run: test -z "$(git status --porcelain)"

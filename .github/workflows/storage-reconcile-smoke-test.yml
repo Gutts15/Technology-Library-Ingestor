@@ -47,6 +47,7 @@ jobs:
               "${root}/00_LIBRARY" \
               "${root}/99_INBOX/DROP_HERE" \
               "${root}/99_INBOX/TO_REVIEW/VIDEOS" \
+              "${root}/99_INBOX/CANDIDATES" \
               "${root}/99_INBOX/READY_FOR_ANALYSIS/pkg" \
               "${root}/99_INBOX/PROCESS_LOG/STORAGE" \
               "${root}/99_INBOX/PROCESS_LOG/RECORDS" \
@@ -73,7 +74,7 @@ jobs:
           root = Path('tmp/backup/99_INBOX/PROCESS_LOG/STORAGE')
           root.joinpath('replication-state.json').write_text(json.dumps({
               'schema_version': 1,
-              'replica_version': '0.1.1',
+              'replica_version': '0.2.0',
               'complete': True,
               'phase': 'post',
               'completed_at': datetime.now(timezone.utc).isoformat(),
@@ -81,7 +82,7 @@ jobs:
               'destination_role': 'standby',
               'source_provider': 'primary',
               'destination_provider': 'backup',
-              'scope_count': 7,
+              'scope_count': 8,
               'scope_policy': 'critical_state_v1',
           }) + '\n', encoding='utf-8')
           root.joinpath('failover-active.json').write_text(json.dumps({
@@ -103,7 +104,7 @@ jobs:
             --backup-provider backup \
             --auto \
             > tmp/reconcile.log 2>&1
-          grep -q "storage_reconcile_ok version=0.1.0 scopes=7 deep=2 quarantine=1" tmp/reconcile.log
+          grep -q "storage_reconcile_ok version=0.1.0 scopes=8 deep=2 quarantine=1" tmp/reconcile.log
 
       - name: Validate reconciled state and quarantine
         run: |
@@ -132,13 +133,13 @@ jobs:
           for base in (Path('tmp/primary'), Path('tmp/backup')):
               reconcile = json.loads((base / '99_INBOX/PROCESS_LOG/STORAGE/reconciliation-state.json').read_text())
               assert reconcile['status'] == 'complete'
-              assert reconcile['scope_count'] == 7
+              assert reconcile['scope_count'] == 8
               assert reconcile['quarantine_policy'] == 'preserve_displaced_primary_v1'
               marker = json.loads((base / '99_INBOX/PROCESS_LOG/STORAGE/replication-state.json').read_text())
               assert marker['complete'] is True
               assert marker['phase'] == 'post'
               assert marker['scope_policy'] == 'critical_state_v1'
-              assert marker['scope_count'] == 7
+              assert marker['scope_count'] == 8
           PY
 
       - name: Confirm post-reconcile critical scopes are equal
@@ -148,6 +149,7 @@ jobs:
             "00_LIBRARY" \
             "99_INBOX/DROP_HERE" \
             "99_INBOX/TO_REVIEW" \
+            "99_INBOX/CANDIDATES" \
             "99_INBOX/READY_FOR_ANALYSIS" \
             "99_INBOX/PROCESS_LOG" \
             "99_INBOX/CURATION" \

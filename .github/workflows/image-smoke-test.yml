@@ -81,7 +81,7 @@ jobs:
           python3 src/media_router.py \
             --remote "fake:$(pwd)/tmp/fake" \
             > tmp/router.log 2>&1
-          grep -q "media_router_ok scanned=6 videos=0 images=6" tmp/router.log
+          grep -q "router_ok scanned=6 videos=0 images=6" tmp/router.log
 
       - name: Run Image V1 bridge
         run: |

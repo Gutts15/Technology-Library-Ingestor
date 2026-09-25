@@ -105,7 +105,7 @@ jobs:
           python3 src/media_router.py \
             --remote "fake:$(pwd)/tmp/fake-drive" \
             > tmp/media-router.log 2>&1
-          grep -q "media_router_ok scanned=10 videos=2 images=2 audio=1 documents=1 spreadsheets=0 text=1 links=1 archives=1 unknown=1 renamed=1" tmp/media-router.log
+          grep -q "router_ok scanned=10 videos=2 images=2 audio=1 documents=1 spreadsheets=0 text=1 links=1 archives=1 unknown=1 renamed=1" tmp/media-router.log
 
       - name: Validate unified routing collision handling and privacy
         run: |

@@ -43,6 +43,7 @@ jobs:
             "${PRIMARY}/00_LIBRARY" \
             "${PRIMARY}/99_INBOX/DROP_HERE" \
             "${PRIMARY}/99_INBOX/TO_REVIEW/VIDEOS" \
+            "${PRIMARY}/99_INBOX/CANDIDATES" \
             "${PRIMARY}/99_INBOX/READY_FOR_ANALYSIS/aaaaaaaaaaaaaaaaaaaa" \
             "${PRIMARY}/99_INBOX/PROCESS_LOG/RECORDS" \
             "${PRIMARY}/99_INBOX/CURATION" \
@@ -66,7 +67,7 @@ jobs:
             --destination "backup:$(pwd)/tmp/backup" \
             --phase post \
             > tmp/replica.log 2>&1
-          grep -q "storage_replica_ok phase=post scopes=7" tmp/replica.log
+          grep -q "storage_replica_ok phase=post scopes=8" tmp/replica.log
 
       - name: Validate standby scope and exclusion policy
         run: |
@@ -75,6 +76,7 @@ jobs:
           test -f "${BACKUP}/00_LIBRARY/state.md"
           test -f "${BACKUP}/99_INBOX/DROP_HERE/private-upload.mp4"
           test -f "${BACKUP}/99_INBOX/TO_REVIEW/VIDEOS/private-pending.mp4"
+          test -d "${BACKUP}/99_INBOX/CANDIDATES"
           test -f "${BACKUP}/99_INBOX/READY_FOR_ANALYSIS/aaaaaaaaaaaaaaaaaaaa/evidence-summary.json"
           test -f "${BACKUP}/99_INBOX/PROCESS_LOG/RECORDS/aaaaaaaaaaaaaaaaaaaa.json"
           test -f "${BACKUP}/99_INBOX/CURATION/state.json"
@@ -87,10 +89,10 @@ jobs:
           from pathlib import Path
           state = json.loads(Path('tmp/backup/99_INBOX/PROCESS_LOG/STORAGE/replication-state.json').read_text())
           assert state['schema_version'] == 1
-          assert state['replica_version'] == '0.1.1'
+          assert state['replica_version'] == '0.2.0'
           assert state['complete'] is True
           assert state['phase'] == 'post'
-          assert state['scope_count'] == 7
+          assert state['scope_count'] == 8
           assert state['scope_policy'] == 'critical_state_v1'
           PY
 
