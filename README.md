@@ -28,3 +28,14 @@ python tests/test_retrieval_regression_cases.py
 ```
 
 The [public roadmap](docs/PROJECT_ROADMAP.md) tracks the remaining stages.
+
+## Public project status
+
+Stage 19 (public automation boundary) is DONE. The clean-history repository is
+public, and the bounded post-publication private-storage canary passed in
+[Actions run 36191129517](https://github.com/Gutts15/Technology-Library-Ingestor/actions/runs/36191129517)
+with zero artifacts and no private values found in its public logs. The private Drive
+and its contents remain outside this repository.
+
+Next is Stage 20 — Zero-touch Drive intake. The overall project remains
+IN_PROGRESS; the Charter's 500-item black-box acceptance test is NOT_RUN.
