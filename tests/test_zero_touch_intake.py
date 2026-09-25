@@ -121,6 +121,16 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(1, intake.process(store, now=100)["unsupported"])
         self.assertEqual(0, store.copies)
 
+    def test_acceptance_mode_excludes_real_names_even_if_new(self) -> None:
+        synthetic = item(1)
+        synthetic["Name"] = synthetic["Path"] = "STAGE20_SYNTHETIC_20260925_I.txt"
+        real = item(2)
+        store = FakeStore([real, synthetic])
+        result = intake.process(store, fixture_only=True, now=100)
+        self.assertEqual(1, result["enqueued"])
+        self.assertEqual(1, result["excluded"])
+        self.assertNotIn(intake.identity(real), store.states)
+
     def test_source_changed_during_copy_does_not_mark_done(self) -> None:
         store = FakeStore([item(1)])
         original_enqueue = store.enqueue

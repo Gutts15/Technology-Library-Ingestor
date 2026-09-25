@@ -15,6 +15,12 @@ private baseline marker. This prevents a newly installed schedule from
 processing pre-Stage-20 real backlog. These are one-time deployment controls,
 not routine user steps.
 
+While Stage 20 cadence acceptance is underway, the deployed workflow also
+passes `--fixture-only`: it selects only the explicitly named synthetic test
+family and excludes **all** other items, including any new real upload. The
+general discovery implementation remains available, but removing this safety
+gate requires a separate reviewed change after acceptance.
+
 Discovery lists only the inbox. Each source is keyed by the SHA-256 digest of
 its provider ID; a missing provider ID is held rather than treating its name
 as a stable identity. A revision digest uses size, modification time, and
