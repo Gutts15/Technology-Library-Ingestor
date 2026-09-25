@@ -88,6 +88,24 @@ class SecurityGateTests(unittest.TestCase):
         self.assertIn('${RUNNER_TEMP}/curation-decisions.json', workflow)
         self.assertIn("--require-publish-receipt", workflow)
 
+    def test_keepalive_write_exception_is_schedule_only_without_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = root / ".github/workflows/scheduler-keepalive.yml"
+            path.parent.mkdir(parents=True)
+            original = (
+                security_gate.ROOT / ".github/workflows/scheduler-keepalive.yml"
+            ).read_text(encoding="utf-8")
+            with patch.object(security_gate, "ROOT", root):
+                path.write_text(original, encoding="utf-8")
+                errors: list[str] = []
+                security_gate.check_workflows([path], errors)
+                self.assertEqual([], errors)
+                path.write_text(original + "\n  pull_request:\n  secrets: ${{ secrets.X }}\n", encoding="utf-8")
+                errors = []
+                security_gate.check_workflows([path], errors)
+                self.assertTrue(any("keepalive must be scheduled only" in x for x in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

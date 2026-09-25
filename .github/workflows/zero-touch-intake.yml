@@ -1,0 +1,56 @@
+name: Zero-touch private Drive intake
+
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      baseline_existing:
+        description: 'One-time inventory of pre-Stage-20 inbox items without enqueueing them'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-private-storage-ingest
+  cancel-in-progress: false
+
+jobs:
+  intake:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.TL_STAGE20_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout reviewed default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install storage client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rclone > /dev/null
+
+      - name: Configure private storage without output
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TL_RCLONE_CONFIG:-}" ]; then
+            echo 'intake_error code=secret_missing'
+            exit 2
+          fi
+          umask 077
+          printf '%s' "$TL_RCLONE_CONFIG" > "${RUNNER_TEMP}/tl-rclone.conf"
+          echo "RCLONE_CONFIG=${RUNNER_TEMP}/tl-rclone.conf" >> "$GITHUB_ENV"
+
+      - name: One-time safe baseline
+        if: github.event_name == 'workflow_dispatch' && inputs.baseline_existing == true
+        run: python3 src/zero_touch_intake.py --baseline-existing
+
+      - name: Bounded automatic poll
+        if: github.event_name == 'schedule' || inputs.baseline_existing != true
+        run: python3 src/zero_touch_intake.py
