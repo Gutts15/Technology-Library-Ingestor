@@ -156,12 +156,21 @@ def check_workflows(files: list[Path], errors: list[str]) -> None:
     for path in workflows:
         text = text_of(path) or ""
         rel = path.relative_to(ROOT)
+        is_keepalive = rel.as_posix() == ".github/workflows/scheduler-keepalive.yml"
 
         if "permissions:" not in text:
             fail(errors, f"workflow missing explicit permissions: {rel}")
         for forbidden in ("write-all", "contents: write", "actions: write", "id-token: write", "pull_request_target"):
+            if forbidden == "contents: write" and is_keepalive:
+                continue
             if forbidden in text:
                 fail(errors, f"forbidden workflow capability '{forbidden}': {rel}")
+        if is_keepalive:
+            if "contents: write" not in text or "  schedule:" not in text:
+                fail(errors, "keepalive requires a schedule and narrowly scoped write permission")
+            if ("secrets." in text or "${{ secrets" in text or
+                    re.search(r"(?m)^\s{2}(?:pull_request|workflow_dispatch|push)\s*:", text)):
+                fail(errors, "keepalive must be scheduled only and receive no repository secrets")
         if "actions/upload-artifact" in text:
             fail(errors, f"artifact upload is forbidden in V1 workflows: {rel}")
 

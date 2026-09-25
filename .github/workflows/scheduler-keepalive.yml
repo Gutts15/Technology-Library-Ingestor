@@ -1,0 +1,38 @@
+name: Keep scheduled intake active
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: technology-library-scheduler-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout public code only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Record public repository activity only when needed
+        run: |
+          set -euo pipefail
+          last_commit_epoch="$(git log -1 --format=%ct)"
+          now_epoch="$(date +%s)"
+          if (( now_epoch - last_commit_epoch < 30 * 24 * 60 * 60 )); then
+            echo 'keepalive_ok action=noop'
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit --allow-empty -m 'chore: keep scheduled intake active'
+          git push origin HEAD:main
+          echo 'keepalive_ok action=public_empty_commit'
