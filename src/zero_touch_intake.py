@@ -30,6 +30,7 @@ MAX_BYTES = 512 * 1024 * 1024
 MAX_ITEM_BYTES = 512 * 1024 * 1024
 MAX_SECONDS = 15 * 60
 LEASE_SECONDS = 20 * 60
+ACCEPTANCE_FIXTURE = re.compile(r"^STAGE20_SYNTHETIC_20260925_[A-Z]\.txt$")
 
 
 class IntakeError(Exception):
@@ -161,10 +162,13 @@ class RcloneStore:
         self.write_state("baseline_complete", {"completed": [], "lease": None})
 
 
-def process(store: RcloneStore, *, baseline: bool = False, now: float | None = None) -> dict[str, int]:
+def process(
+    store: RcloneStore, *, baseline: bool = False, fixture_only: bool = False,
+    now: float | None = None,
+) -> dict[str, int]:
     started = time.monotonic()
     wall_now = time.time() if now is None else now
-    stats = {name: 0 for name in ("scanned", "enqueued", "already_done", "baselined", "leased", "deferred", "unsupported")}
+    stats = {name: 0 for name in ("scanned", "enqueued", "already_done", "baselined", "leased", "deferred", "unsupported", "excluded")}
     items = store.list_inbox()
     stats["scanned"] = len(items)
     # Deterministic ordering keeps a large backlog from starving old items.
@@ -174,6 +178,9 @@ def process(store: RcloneStore, *, baseline: bool = False, now: float | None = N
         if time.monotonic() - started >= MAX_SECONDS:
             stats["deferred"] += 1
             break
+        if fixture_only and not ACCEPTANCE_FIXTURE.fullmatch(source_name(item) or ""):
+            stats["excluded"] += 1
+            continue
         key, rev, name = identity(item), revision(item), source_name(item)
         size = item.get("Size")
         if not key or not rev or not name or not isinstance(size, int) or size < 0:
@@ -230,6 +237,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Poll private Drive without logging source metadata")
     parser.add_argument("--remote", default="tl:")
     parser.add_argument("--baseline-existing", action="store_true")
+    parser.add_argument("--fixture-only", action="store_true")
     args = parser.parse_args()
     if not shutil.which("rclone"):
         print("intake_error code=tool_missing")
@@ -246,7 +254,7 @@ def main() -> int:
         else:
             if not store.baseline_complete():
                 raise IntakeError("baseline_required")
-            stats = process(store)
+            stats = process(store, fixture_only=args.fixture_only)
     except IntakeError as exc:
         print(f"intake_error code={exc}")
         return 2

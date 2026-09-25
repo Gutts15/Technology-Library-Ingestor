@@ -53,4 +53,4 @@ jobs:
 
       - name: Bounded automatic poll
         if: github.event_name == 'schedule' || inputs.baseline_existing != true
-        run: python3 src/zero_touch_intake.py
+        run: python3 src/zero_touch_intake.py --fixture-only
