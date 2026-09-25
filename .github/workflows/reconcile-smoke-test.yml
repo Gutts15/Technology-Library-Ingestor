@@ -1,0 +1,217 @@
+name: Reconciliation smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/reconcile.py"
+      - ".github/workflows/reconcile-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-ingestor-reconciliation-test
+  cancel-in-progress: false
+
+jobs:
+  reconciliation-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+      TL_TEST_CANARY: TL_RECONCILE_CANARY_DO_NOT_LEAK_20f93bc1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create synthetic reconciliation states
+        run: |
+          mkdir -p tmp/fake-drive/99_INBOX/PROCESS_LOG/RECORDS
+          mkdir -p tmp/fake-drive/99_INBOX/PROCESS_LOG/RETRY
+          mkdir -p tmp/fake-drive/99_INBOX/READY_FOR_ANALYSIS
+          mkdir -p tmp/fake-drive/99_INBOX/TO_REVIEW/VIDEOS
+          mkdir -p tmp/fake-drive/99_INBOX/PROCESSED/VIDEOS
+          mkdir -p tmp/fake-drive/99_INBOX/ERROR/VIDEOS
+          mkdir -p tmp/workspace
+
+          printf 'source ready for finalize' > tmp/fake-drive/99_INBOX/TO_REVIEW/VIDEOS/PRIVATE_FINALIZE.mp4
+          printf 'source retry processing' > tmp/fake-drive/99_INBOX/ERROR/VIDEOS/PRIVATE_RETRY.mp4
+          printf 'source exhausted' > tmp/fake-drive/99_INBOX/TO_REVIEW/VIDEOS/PRIVATE_EXHAUSTED.mp4
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('tmp/fake-drive')
+          records = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+          retry = root / '99_INBOX/PROCESS_LOG/RETRY'
+
+          def record(package, name, status, error, retryable, destination):
+              return {
+                  'schema_version': 1,
+                  'record_version': '0.1.0',
+                  'source': {
+                      'provider': 'rclone_test',
+                      'file_id': f'id-{package}',
+                      'name': name,
+                      'media_type': 'video/mp4',
+                      'source_folder': '99_INBOX/TO_REVIEW/VIDEOS',
+                      'received_at': '2026-09-08T00:00:00+00:00',
+                  },
+                  'package_id': package,
+                  'processing': {
+                      'status': status,
+                      'error_code': error,
+                      'retryable': retryable,
+                      'processed_at': '2026-09-08T00:00:00+00:00',
+                      'pipeline_version': '0.5.0',
+                      'compactor_version': '0.6.2',
+                  },
+                  'routing': {
+                      'destination_folder': destination,
+                      'keep_original': False,
+                      'source_recoverable': None,
+                      'retention_days': 30,
+                  },
+              }
+
+          # Missing central log, but package already has a valid record.
+          p1 = '11111111111111111111'
+          d1 = ready / p1
+          d1.mkdir(parents=True)
+          (d1 / 'process-record.json').write_text(json.dumps(record(
+              p1, 'PRIVATE_SYNC.mp4', 'processed', None, False,
+              '99_INBOX/PROCESSED/VIDEOS')))
+
+          # Package complete, only original source move failed.
+          p2 = '22222222222222222222'
+          d2 = ready / p2
+          d2.mkdir(parents=True)
+          r2 = record(p2, 'PRIVATE_FINALIZE.mp4', 'error', 'source_move_failed', True,
+                      '99_INBOX/TO_REVIEW/VIDEOS')
+          for name in ('ingest.json', 'checkpoint.json', 'evidence-summary.json'):
+              (d2 / name).write_text('{}')
+          (d2 / 'process-record.json').write_text(json.dumps(r2))
+          (records / f'{p2}.json').write_text(json.dumps(r2))
+
+          # Processing failed and source was moved to ERROR.
+          p3 = '33333333333333333333'
+          r3 = record(p3, 'PRIVATE_RETRY.mp4', 'error', 'processing_failed', True,
+                      '99_INBOX/ERROR/VIDEOS')
+          (records / f'{p3}.json').write_text(json.dumps(r3))
+
+          # Retry budget already exhausted.
+          p4 = '44444444444444444444'
+          r4 = record(p4, 'PRIVATE_EXHAUSTED.mp4', 'error', 'upload_failed', True,
+                      '99_INBOX/TO_REVIEW/VIDEOS')
+          (records / f'{p4}.json').write_text(json.dumps(r4))
+          (retry / f'{p4}.json').write_text(json.dumps({
+              'schema_version': 1,
+              'package_id': p4,
+              'attempts': 3,
+              'last_error_code': 'upload_failed',
+              'updated_at': '2026-09-08T00:00:00+00:00',
+          }))
+          PY
+
+      - name: Reconcile synthetic storage
+        run: |
+          python3 src/reconcile.py \
+            --remote "fake:$(pwd)/tmp/fake-drive" \
+            --workspace tmp/workspace \
+            --max-retries 3 \
+            > tmp/reconcile-first.log 2>&1
+          grep -q "reconcile_ok" tmp/reconcile-first.log
+
+      - name: Validate recovery without unnecessary reprocessing
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('tmp/fake-drive')
+          records = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+          retry = root / '99_INBOX/PROCESS_LOG/RETRY'
+          inbox = root / '99_INBOX/TO_REVIEW/VIDEOS'
+          processed = root / '99_INBOX/PROCESSED/VIDEOS'
+          error = root / '99_INBOX/ERROR/VIDEOS'
+          log = Path('tmp/reconcile-first.log').read_text()
+
+          p1 = '11111111111111111111'
+          p2 = '22222222222222222222'
+          p3 = '33333333333333333333'
+          p4 = '44444444444444444444'
+
+          # READY package repaired the missing central log automatically.
+          assert (records / f'{p1}.json').is_file()
+
+          # Completed package did not need media reprocessing, only the source move.
+          assert (processed / 'PRIVATE_FINALIZE.mp4').is_file()
+          assert not (inbox / 'PRIVATE_FINALIZE.mp4').exists()
+          central2 = json.loads((records / f'{p2}.json').read_text())
+          package2 = json.loads((ready / p2 / 'process-record.json').read_text())
+          assert central2 == package2
+          assert central2['processing']['status'] == 'processed'
+          assert central2['processing']['error_code'] is None
+          assert central2['processing']['retryable'] is False
+          assert central2['reconciliation']['state'] == 'resolved_without_reprocessing'
+          assert not (retry / f'{p2}.json').exists()
+
+          # Processing error was requeued with a bounded retry counter.
+          assert (inbox / 'PRIVATE_RETRY.mp4').is_file()
+          assert not (error / 'PRIVATE_RETRY.mp4').exists()
+          central3 = json.loads((records / f'{p3}.json').read_text())
+          state3 = json.loads((retry / f'{p3}.json').read_text())
+          assert central3['processing']['status'] == 'retry_queued'
+          assert central3['reconciliation']['attempts'] == 1
+          assert state3['attempts'] == 1
+
+          # Exhausted source leaves the active queue and cannot loop forever.
+          assert not (inbox / 'PRIVATE_EXHAUSTED.mp4').exists()
+          assert (error / 'PRIVATE_EXHAUSTED.mp4').is_file()
+          central4 = json.loads((records / f'{p4}.json').read_text())
+          assert central4['processing']['status'] == 'error'
+          assert central4['processing']['retryable'] is False
+          assert central4['reconciliation']['state'] == 'exhausted'
+
+          for private_name in (
+              'PRIVATE_SYNC.mp4',
+              'PRIVATE_FINALIZE.mp4',
+              'PRIVATE_RETRY.mp4',
+              'PRIVATE_EXHAUSTED.mp4',
+          ):
+              assert private_name not in log
+          assert os.environ['TL_TEST_CANARY'] not in log
+          print('reconciliation_repairs_ok bounded_retry_ok log_privacy_ok')
+          PY
+
+      - name: Re-run reconciliation idempotently
+        run: |
+          rm -rf tmp/workspace-second
+          python3 src/reconcile.py \
+            --remote "fake:$(pwd)/tmp/fake-drive" \
+            --workspace tmp/workspace-second \
+            --max-retries 3 \
+            > tmp/reconcile-second.log 2>&1
+          grep -q "reconcile_ok" tmp/reconcile-second.log
+          grep -q "pending=1" tmp/reconcile-second.log
+
+      - name: Remove generated data
+        if: always()
+        run: |
+          rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: |
+          test -z "$(git status --porcelain)"

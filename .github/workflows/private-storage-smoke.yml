@@ -1,0 +1,50 @@
+name: Private storage smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  private-storage-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Configure private storage
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          test -n "${TL_RCLONE_CONFIG}"
+          CONFIG_FILE="${RUNNER_TEMP}/tl-rclone.conf"
+          umask 077
+          printf '%s' "${TL_RCLONE_CONFIG}" > "${CONFIG_FILE}"
+          echo "RCLONE_CONFIG=${CONFIG_FILE}" >> "${GITHUB_ENV}"
+
+      - name: Run sanitized private-storage canary
+        run: |
+          set -euo pipefail
+          CANARY_NAME="public-runtime-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          CANARY_REMOTE="tl:99_INBOX/SECURITY_SMOKE/${CANARY_NAME}"
+          trap 'rclone deletefile "${CANARY_REMOTE}" --log-level ERROR >/dev/null 2>&1 || true' EXIT
+          printf 'technology-library-public-runtime-smoke\n' > "${RUNNER_TEMP}/${CANARY_NAME}"
+          rclone copyto "${RUNNER_TEMP}/${CANARY_NAME}" "${CANARY_REMOTE}" --log-level ERROR --stats 0
+          rclone cat "${CANARY_REMOTE}" --log-level ERROR | grep -qx 'technology-library-public-runtime-smoke'
+          echo "private_storage_smoke_ok"
+
+      - name: Remove temporary credentials and canary
+        if: always()
+        run: |
+          rm -f "${RUNNER_TEMP}/tl-rclone.conf"
+          rm -f "${RUNNER_TEMP}/public-runtime-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"

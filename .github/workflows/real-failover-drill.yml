@@ -1,0 +1,186 @@
+name: Real storage failover drill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Share the production ingest concurrency group so a drill can never overlap
+# with a real ingestion run.
+concurrency:
+  group: technology-library-private-storage-ingest
+  cancel-in-progress: false
+
+jobs:
+  failover-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Configure real primary and standby
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+          TL_STORAGE_PROVIDER: ${{ secrets.TL_STORAGE_PROVIDER }}
+          TL_RCLONE_BACKUP_CONFIG: ${{ secrets.TL_RCLONE_BACKUP_CONFIG }}
+          TL_STORAGE_BACKUP_PROVIDER: ${{ secrets.TL_STORAGE_BACKUP_PROVIDER }}
+          TL_GOOGLE_CLIENT_ID: ${{ secrets.TL_GOOGLE_CLIENT_ID }}
+          TL_GOOGLE_CLIENT_SECRET: ${{ secrets.TL_GOOGLE_CLIENT_SECRET }}
+          TL_GOOGLE_TOKEN: ${{ secrets.TL_GOOGLE_TOKEN }}
+          TL_GOOGLE_ROOT_FOLDER_ID: ${{ secrets.TL_GOOGLE_ROOT_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          CONFIG_FILE="${RUNNER_TEMP}/tl-drill-rclone.conf"
+          ENV_FILE="${RUNNER_TEMP}/tl-drill-storage.env"
+          umask 077
+          : > "${CONFIG_FILE}"
+          : > "${ENV_FILE}"
+
+          if [ -n "${TL_RCLONE_CONFIG:-}" ]; then
+            printf '%s' "${TL_RCLONE_CONFIG}" > "${CONFIG_FILE}"
+            PRIMARY_PROVIDER="${TL_STORAGE_PROVIDER:-rclone}"
+          else
+            test -n "${TL_GOOGLE_CLIENT_ID:-}"
+            test -n "${TL_GOOGLE_CLIENT_SECRET:-}"
+            test -n "${TL_GOOGLE_TOKEN:-}"
+            test -n "${TL_GOOGLE_ROOT_FOLDER_ID:-}"
+            cat > "${CONFIG_FILE}" <<EOF
+          [tl]
+          type = drive
+          client_id = ${TL_GOOGLE_CLIENT_ID}
+          client_secret = ${TL_GOOGLE_CLIENT_SECRET}
+          token = ${TL_GOOGLE_TOKEN}
+          scope = drive
+          root_folder_id = ${TL_GOOGLE_ROOT_FOLDER_ID}
+          EOF
+            PRIMARY_PROVIDER="google_drive"
+          fi
+
+          test -n "${TL_RCLONE_BACKUP_CONFIG:-}"
+          printf '\n%s\n' "${TL_RCLONE_BACKUP_CONFIG}" >> "${CONFIG_FILE}"
+          BACKUP_PROVIDER="${TL_STORAGE_BACKUP_PROVIDER:-onedrive}"
+
+          {
+            echo "RCLONE_CONFIG=${CONFIG_FILE}"
+            echo "TL_PRIMARY_PROVIDER=${PRIMARY_PROVIDER}"
+            echo "TL_BACKUP_PROVIDER=${BACKUP_PROVIDER}"
+            echo "TL_DRILL_LOCK=99_INBOX/PROCESS_LOG/STORAGE/DRILLS/${GITHUB_RUN_ID}-failover-active.json"
+          } >> "${ENV_FILE}"
+
+          cat "${ENV_FILE}" >> "${GITHUB_ENV}"
+
+      - name: Verify both real storage endpoints are healthy
+        run: |
+          set -euo pipefail
+          python3 src/storage_preflight.py --remote "tl:"
+          python3 src/storage_preflight.py --remote "tl_backup:"
+          python3 src/standby_readiness.py \
+            --remote "tl_backup:" \
+            --max-backup-age-hours 24 \
+            --require-unlocked
+
+      - name: Simulate primary outage and select real standby
+        run: |
+          set -euo pipefail
+          FALLBACK_ENV="${RUNNER_TEMP}/tl-drill-fallback.env"
+          python3 src/storage_failover.py \
+            --primary "tl_drill_missing:" \
+            --backup "tl_backup:" \
+            --primary-provider "${TL_PRIMARY_PROVIDER}" \
+            --backup-provider "${TL_BACKUP_PROVIDER}" \
+            --backup-configured \
+            --max-backup-age-hours 24 \
+            --failover-lock "${TL_DRILL_LOCK}" \
+            --env-out "${FALLBACK_ENV}" \
+            > "${RUNNER_TEMP}/tl-drill-fallback.log" 2>&1
+          grep -q "storage_select_ok mode=fallback" "${RUNNER_TEMP}/tl-drill-fallback.log"
+          grep -q '^TL_STORAGE_MODE=fallback$' "${FALLBACK_ENV}"
+          grep -q '^TL_ACTIVE_REMOTE=tl_backup:$' "${FALLBACK_ENV}"
+
+      - name: Confirm real primary return does not auto-failback while drill lock exists
+        run: |
+          set -euo pipefail
+          LOCKED_ENV="${RUNNER_TEMP}/tl-drill-locked.env"
+          python3 src/storage_failover.py \
+            --primary "tl:" \
+            --backup "tl_backup:" \
+            --primary-provider "${TL_PRIMARY_PROVIDER}" \
+            --backup-provider "${TL_BACKUP_PROVIDER}" \
+            --backup-configured \
+            --max-backup-age-hours 24 \
+            --failover-lock "${TL_DRILL_LOCK}" \
+            --env-out "${LOCKED_ENV}" \
+            > "${RUNNER_TEMP}/tl-drill-locked.log" 2>&1
+          grep -q "storage_select_ok mode=fallback_locked" "${RUNNER_TEMP}/tl-drill-locked.log"
+          grep -q '^TL_STORAGE_MODE=fallback_locked$' "${LOCKED_ENV}"
+          grep -q '^TL_ACTIVE_REMOTE=tl_backup:$' "${LOCKED_ENV}"
+
+      - name: Release isolated drill lock
+        run: |
+          set -euo pipefail
+          if rclone cat "tl_backup:${TL_DRILL_LOCK}" --log-level ERROR > /dev/null 2>&1; then
+            rclone deletefile "tl_backup:${TL_DRILL_LOCK}" --log-level ERROR
+          fi
+
+      - name: Confirm normal primary selection is restored
+        run: |
+          set -euo pipefail
+          PRIMARY_ENV="${RUNNER_TEMP}/tl-drill-primary.env"
+          python3 src/storage_failover.py \
+            --primary "tl:" \
+            --backup "tl_backup:" \
+            --primary-provider "${TL_PRIMARY_PROVIDER}" \
+            --backup-provider "${TL_BACKUP_PROVIDER}" \
+            --backup-configured \
+            --max-backup-age-hours 24 \
+            --failover-lock "${TL_DRILL_LOCK}" \
+            --env-out "${PRIMARY_ENV}" \
+            > "${RUNNER_TEMP}/tl-drill-primary.log" 2>&1
+          grep -q "storage_select_ok mode=primary" "${RUNNER_TEMP}/tl-drill-primary.log"
+          grep -q '^TL_STORAGE_MODE=primary$' "${PRIMARY_ENV}"
+          grep -q '^TL_ACTIVE_REMOTE=tl:$' "${PRIMARY_ENV}"
+
+      - name: Confirm production standby remains unlocked and ready
+        run: |
+          set -euo pipefail
+          python3 src/standby_readiness.py \
+            --remote "tl_backup:" \
+            --max-backup-age-hours 24 \
+            --require-unlocked
+          echo "real_failover_drill_ok"
+
+      - name: Safety-remove drill lock
+        if: always()
+        run: |
+          if [ -n "${TL_DRILL_LOCK:-}" ] && [ -n "${RCLONE_CONFIG:-}" ]; then
+            if rclone cat "tl_backup:${TL_DRILL_LOCK}" --log-level ERROR > /dev/null 2>&1; then
+              rclone deletefile "tl_backup:${TL_DRILL_LOCK}" --log-level ERROR || true
+            fi
+          fi
+
+      - name: Remove temporary configuration and drill files
+        if: always()
+        run: |
+          rm -f \
+            "${RUNNER_TEMP}/tl-drill-rclone.conf" \
+            "${RUNNER_TEMP}/tl-drill-storage.env" \
+            "${RUNNER_TEMP}/tl-drill-fallback.env" \
+            "${RUNNER_TEMP}/tl-drill-locked.env" \
+            "${RUNNER_TEMP}/tl-drill-primary.env" \
+            "${RUNNER_TEMP}/tl-drill-fallback.log" \
+            "${RUNNER_TEMP}/tl-drill-locked.log" \
+            "${RUNNER_TEMP}/tl-drill-primary.log"
+
+      - name: Verify clean repository workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

@@ -1,0 +1,198 @@
+name: Curation decision sync
+
+on:
+  # Exceptional/admin fallback only. Stages 23-24 will call the same private
+  # decision boundary from the automatic promotion path.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-private-storage-ingest
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install minimal storage tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Configure private storage
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+          TL_STORAGE_PROVIDER: ${{ secrets.TL_STORAGE_PROVIDER }}
+          TL_RCLONE_BACKUP_CONFIG: ${{ secrets.TL_RCLONE_BACKUP_CONFIG }}
+          TL_STORAGE_BACKUP_PROVIDER: ${{ secrets.TL_STORAGE_BACKUP_PROVIDER }}
+          TL_GOOGLE_CLIENT_ID: ${{ secrets.TL_GOOGLE_CLIENT_ID }}
+          TL_GOOGLE_CLIENT_SECRET: ${{ secrets.TL_GOOGLE_CLIENT_SECRET }}
+          TL_GOOGLE_TOKEN: ${{ secrets.TL_GOOGLE_TOKEN }}
+          TL_GOOGLE_ROOT_FOLDER_ID: ${{ secrets.TL_GOOGLE_ROOT_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          CONFIG_FILE="${RUNNER_TEMP}/tl-rclone.conf"
+          ENV_FILE="${RUNNER_TEMP}/tl-storage.env"
+          umask 077
+          : > "${CONFIG_FILE}"
+          : > "${ENV_FILE}"
+
+          if [ -n "${TL_RCLONE_CONFIG:-}" ]; then
+            printf '%s' "${TL_RCLONE_CONFIG}" > "${CONFIG_FILE}"
+            PRIMARY_PROVIDER="${TL_STORAGE_PROVIDER:-rclone}"
+          else
+            cat > "${CONFIG_FILE}" <<EOF
+          [tl]
+          type = drive
+          client_id = ${TL_GOOGLE_CLIENT_ID}
+          client_secret = ${TL_GOOGLE_CLIENT_SECRET}
+          token = ${TL_GOOGLE_TOKEN}
+          scope = drive
+          root_folder_id = ${TL_GOOGLE_ROOT_FOLDER_ID}
+          EOF
+            PRIMARY_PROVIDER="google_drive"
+          fi
+
+          BACKUP_CONFIGURED=0
+          BACKUP_PROVIDER="${TL_STORAGE_BACKUP_PROVIDER:-onedrive}"
+          if [ -n "${TL_RCLONE_BACKUP_CONFIG:-}" ]; then
+            printf '\n%s\n' "${TL_RCLONE_BACKUP_CONFIG}" >> "${CONFIG_FILE}"
+            BACKUP_CONFIGURED=1
+          fi
+
+          {
+            echo "RCLONE_CONFIG=${CONFIG_FILE}"
+            echo "TL_PRIMARY_PROVIDER=${PRIMARY_PROVIDER}"
+            echo "TL_BACKUP_PROVIDER=${BACKUP_PROVIDER}"
+            echo "TL_BACKUP_CONFIGURED=${BACKUP_CONFIGURED}"
+          } >> "${ENV_FILE}"
+          echo "TL_STORAGE_ENV=${ENV_FILE}" >> "${GITHUB_ENV}"
+          echo "TL_BACKUP_CONFIGURED=${BACKUP_CONFIGURED}" >> "${GITHUB_ENV}"
+
+      - name: Reconcile recovered primary before failback
+        if: env.TL_BACKUP_CONFIGURED == '1'
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          RECONCILE_LOG="${RUNNER_TEMP}/tl-storage-reconcile.log"
+          python3 src/storage_reconcile.py \
+            --primary "tl:" \
+            --backup "tl_backup:" \
+            --primary-provider "${TL_PRIMARY_PROVIDER}" \
+            --backup-provider "${TL_BACKUP_PROVIDER}" \
+            --auto \
+            > "${RECONCILE_LOG}" 2>&1
+          if grep -q '^storage_reconcile_ok ' "${RECONCILE_LOG}"; then
+            echo "storage_reconcile_auto_result=reconciled"
+          elif grep -q '^storage_reconcile_skip ' "${RECONCILE_LOG}"; then
+            echo "storage_reconcile_auto_result=skip"
+          else
+            echo "storage_reconcile_auto_result=unexpected"
+            exit 1
+          fi
+
+      - name: Select active private storage
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          ACTIVE_ENV="${RUNNER_TEMP}/tl-active-storage.env"
+          args=(
+            --primary "tl:"
+            --backup "tl_backup:"
+            --primary-provider "${TL_PRIMARY_PROVIDER}"
+            --backup-provider "${TL_BACKUP_PROVIDER}"
+            --max-backup-age-hours 24
+            --env-out "${ACTIVE_ENV}"
+          )
+          if [ "${TL_BACKUP_CONFIGURED}" = "1" ]; then
+            args+=(--backup-configured)
+          fi
+          python3 src/storage_failover.py "${args[@]}"
+          cat "${ACTIVE_ENV}" >> "${TL_STORAGE_ENV}"
+          cat "${ACTIVE_ENV}" >> "${GITHUB_ENV}"
+
+      - name: Fetch private curation decisions
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          DECISIONS_FILE="${RUNNER_TEMP}/curation-decisions.json"
+          umask 077
+          rclone copyto \
+            "${TL_ACTIVE_REMOTE}99_INBOX/CURATION/DECISIONS/latest.json" \
+            "${DECISIONS_FILE}" \
+            --log-level ERROR
+          echo "TL_CURATION_DECISIONS_FILE=${DECISIONS_FILE}" >> "${GITHUB_ENV}"
+
+      - name: Publish canonical library records
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/library_publish.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --apply
+
+      - name: Build canonical library indexes
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/library_index_build.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --apply
+
+      - name: Apply revision-safe curation decisions
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/curation_decision_apply.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --decisions "${TL_CURATION_DECISIONS_FILE}" \
+            --require-publish-receipt
+
+      - name: Replicate updated critical state to standby
+        if: env.TL_BACKUP_CONFIGURED == '1' && env.TL_STORAGE_MODE == 'primary'
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/storage_replica.py \
+            --source "tl:" \
+            --destination "tl_backup:" \
+            --source-provider "${TL_PRIMARY_PROVIDER}" \
+            --destination-provider "${TL_BACKUP_PROVIDER}" \
+            --phase post
+
+      - name: Remove temporary storage data
+        if: always()
+        run: |
+          rm -f \
+            "${RUNNER_TEMP}/tl-storage-reconcile.log" \
+            "${RUNNER_TEMP}/tl-active-storage.env" \
+            "${RUNNER_TEMP}/curation-decisions.json" \
+            "${RUNNER_TEMP}/tl-rclone.conf" \
+            "${RUNNER_TEMP}/tl-storage.env"
+
+      - name: Verify repository workspace is clean
+        if: always()
+        run: test -z "$(git status --porcelain)"

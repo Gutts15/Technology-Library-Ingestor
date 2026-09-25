@@ -1,0 +1,295 @@
+name: Synthetic smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - ".github/workflows/synthetic-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-ingestor-smoke-test
+  cancel-in-progress: false
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TL_TEST_CANARY: TL_CANARY_DO_NOT_LEAK_7f94b8a6c2d14946
+      PYTHONPATH: src
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned v4
+
+      - name: Enforce zero-additional-cost source guardrail
+        run: |
+          python3 src/cost_guardrail.py
+
+      - name: Validate candidate contract parser
+        run: |
+          python3 - <<'PY'
+          from src.candidate_queue import validate_candidate
+
+          valid = """TYPE: CANDIDATE
+          CANDIDATE_STATUS: TO_REVIEW
+          PROPOSED_TYPE: TECHNOLOGY
+          PROPOSED_STATUS: TEST
+          PROPOSED_DOMAIN: 04_AI_AGENTS
+          PROPOSED_CATEGORY: INTEGRATIONS
+          TITLE: Example Candidate
+          LAST_CHECKED: 2026-09-10
+          SOURCE_ORIGIN: Synthetic smoke test.
+
+          # Example Candidate
+          """.replace("          ", "")
+          headers, errors = validate_candidate("candidate-example.md", valid)
+          assert not errors, errors
+          assert headers["TYPE"] == "CANDIDATE"
+
+          invalid = """TYPE: TECHNOLOGY
+          CANDIDATE_STATUS: PUBLISHED
+          TITLE: Invalid Candidate
+          LAST_CHECKED: 2026-99-99
+          SOURCE_ORIGIN: Synthetic smoke test.
+
+          # Invalid
+          """.replace("          ", "")
+          _, errors = validate_candidate("candidate-invalid.md", invalid)
+          assert "invalid_type" in errors
+          assert "invalid_candidate_status" in errors
+          assert "invalid_last_checked" in errors
+          print("candidate_contract_ok")
+          PY
+
+      - name: Validate deterministic candidate preflight helpers
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          from candidate_validator import normalize_title, parse_master_index
+
+          assert normalize_title("Godót MCP / AI Editor Control") == "godot mcp ai editor control"
+          master = """# MASTER_INDEX
+
+          ## 04_AI_AGENTS
+          ### INTEGRATIONS
+          - TECHNOLOGY - Existing Tool [REFERENCE] (`00_LIBRARY/04_AI_AGENTS/INTEGRATIONS/technology-existing-tool.md`)
+          - PATTERN - Stable Pattern [TEST] (`00_LIBRARY/04_AI_AGENTS/WORKFLOWS/pattern-stable-pattern.md`)
+          """.replace("          ", "")
+          records = parse_master_index(master)
+          assert len(records) == 2, records
+          assert records[0]["title_key"] == "existing tool"
+          assert records[0]["status"] == "REFERENCE"
+          assert records[1]["type"] == "PATTERN"
+          print("candidate_validator_helpers_ok")
+          PY
+
+      - name: Validate semantic contract and adaptive candidate planner
+        run: |
+          python3 - <<'PY'
+          import sys
+          from datetime import datetime, timezone
+          sys.path.insert(0, "src")
+          from candidate_batch_plan import build_plan
+          from candidate_semantic_contract import SEMANTIC_CONTRACT_VERSION, validate_semantic_payload
+
+          candidate_id = "a" * 20
+          candidate_sha = "b" * 64
+          index = {
+              "schema_version": 1,
+              "generated_at": "2026-09-10T12:00:00+00:00",
+              "entries": [
+                  {
+                      "candidate_id": candidate_id,
+                      "sha256": candidate_sha,
+                      "valid": True,
+                      "last_checked": "2026-09-01",
+                  }
+              ],
+          }
+          proposals = {
+              "schema_version": 1,
+              "entries": [
+                  {"candidate_id": candidate_id, "proposal": "READY_FOR_SEMANTIC"}
+              ],
+          }
+          wait_plan = build_plan(
+              index,
+              proposals,
+              now=datetime(2026, 9, 10, tzinfo=timezone.utc),
+              volume_threshold=5,
+              max_wait_days=30,
+          )
+          assert wait_plan["state"] == "WAIT", wait_plan
+          assert wait_plan["should_run"] is False
+
+          due_plan = build_plan(
+              index,
+              proposals,
+              now=datetime(2026, 10, 5, tzinfo=timezone.utc),
+              volume_threshold=5,
+              max_wait_days=30,
+          )
+          assert due_plan["state"] == "DUE", due_plan
+          assert due_plan["reason"] == "max_wait_age"
+          assert due_plan["selected_candidate_ids"] == [candidate_id]
+
+          semantic = {
+              "schema_version": 1,
+              "semantic_contract_version": SEMANTIC_CONTRACT_VERSION,
+              "items": [
+                  {
+                      "candidate_id": candidate_id,
+                      "candidate_sha256": candidate_sha,
+                      "decision": "VALIDATED_NEW",
+                      "evidence_level": "HIGH",
+                  }
+              ],
+          }
+          accepted, errors = validate_semantic_payload(semantic, index)
+          assert len(accepted) == 1 and not errors, (accepted, errors)
+
+          semantic["items"][0]["candidate_sha256"] = "c" * 64
+          accepted, errors = validate_semantic_payload(semantic, index)
+          assert not accepted
+          assert "semantic_stale_candidate_revision" in errors
+          print("candidate_semantic_contract_ok candidate_batch_plan_ok")
+          PY
+
+      - name: Validate provider MIME routing for extensionless files
+        run: |
+          python3 - <<'PY'
+          from src.media_router import classify_item
+
+          cases = [
+              ({"Name": "Video sem extensao", "MimeType": "video/mp4"}, "video"),
+              ({"Name": "Imagem sem extensao", "MimeType": "image/png"}, "image"),
+              ({"Name": "Audio sem extensao", "MimeType": "audio/mpeg"}, "audio"),
+          ]
+          for item, expected in cases:
+              actual = classify_item(item)
+              assert actual == expected, (item, actual, expected)
+
+          assert classify_item({"Name": "Arquivo sem extensao", "MimeType": "application/octet-stream"}) == "unknown"
+          print("extensionless_mime_routing_ok")
+          PY
+
+      - name: Install media and OCR tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-por fonts-dejavu-core
+
+      - name: Create synthetic video with readable text
+        run: |
+          mkdir -p tmp output
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i "color=c=white:size=640x360:rate=24" \
+            -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='TECH 1234':fontcolor=black:fontsize=72:x=(w-text_w)/2:y=(h-text_h)/2" \
+            -t 3 \
+            -pix_fmt yuv420p \
+            tmp/PRIVATE_TEST_VIDEO.mp4
+
+      - name: Run ingestor with OCR and captured stdout
+        run: |
+          python3 src/ingest_video.py \
+            tmp/PRIVATE_TEST_VIDEO.mp4 \
+            --out output \
+            --max-keyframes 6 \
+            --ocr \
+            > tmp/ingestor.log 2>&1
+
+      - name: Validate manifest, OCR, compact artifacts and privacy invariants
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path('output/ingest.json')
+          data = json.loads(manifest_path.read_text())
+          log = Path('tmp/ingestor.log').read_text()
+          canary = os.environ['TL_TEST_CANARY']
+
+          assert data['schema_version'] == 1
+          assert data['processing']['status'] == 'processed'
+          assert data['processing']['pipeline_version'] == '0.5.0'
+          assert data['media']['width'] == 640
+          assert data['media']['height'] == 360
+          assert data['media']['has_audio'] is False
+          assert len(data['source']['sha256']) == 64
+
+          keyframes = data['artifacts']['keyframes']
+          stats = data['processing']['keyframe_stats']
+          assert 1 <= len(keyframes) <= 6
+          assert stats['selected_keyframes'] == len(keyframes)
+          assert stats['hash_candidates'] >= stats['unique_candidates'] >= len(keyframes)
+          assert stats['duplicates_removed'] >= 0
+
+          previous_ts = -1.0
+          for frame in keyframes:
+              frame_path = Path('output') / frame['path']
+              assert frame_path.is_file()
+              assert frame_path.stat().st_size > 0
+              assert frame['timestamp_seconds'] >= previous_ts
+              assert len(frame['dhash']) == 16
+              previous_ts = frame['timestamp_seconds']
+
+          timeline_rel = data['artifacts']['timeline']
+          contact_rel = data['artifacts']['contact_sheet']
+          ocr_rel = data['artifacts']['ocr']
+          assert timeline_rel == 'timeline.md'
+          assert contact_rel == 'contact-sheet.jpg'
+          assert ocr_rel == 'ocr.json'
+          assert data['artifacts']['transcript'] is None
+
+          timeline_path = Path('output') / timeline_rel
+          contact_path = Path('output') / contact_rel
+          ocr_path = Path('output') / ocr_rel
+          assert timeline_path.is_file() and timeline_path.stat().st_size > 0
+          assert contact_path.is_file() and contact_path.stat().st_size > 0
+          assert ocr_path.is_file() and ocr_path.stat().st_size > 0
+
+          ocr = json.loads(ocr_path.read_text())
+          ocr_stats = data['processing']['ocr_stats']
+          assert ocr['engine'] == 'tesseract'
+          assert ocr_stats['enabled'] is True
+          assert ocr_stats['frames_attempted'] == len(keyframes)
+          assert ocr_stats['frames_with_text'] >= 1
+          texts = [record['text'].upper() for record in ocr['records']]
+          assert any('TECH' in text and '1234' in text for text in texts)
+
+          transcript_stats = data['processing']['transcript_stats']
+          assert transcript_stats['enabled'] is False
+
+          timeline = timeline_path.read_text()
+          assert '# Video Evidence Timeline' in timeline
+          assert timeline.count('## ') == len(keyframes)
+          assert '**OCR**' in timeline
+          assert 'TECH' in timeline.upper()
+          assert 'PRIVATE_TEST_VIDEO.mp4' not in timeline
+          assert canary not in timeline
+
+          assert 'PRIVATE_TEST_VIDEO.mp4' not in log
+          assert canary not in log
+          assert canary not in manifest_path.read_text()
+          assert canary not in ocr_path.read_text()
+          assert all('PRIVATE_TEST_VIDEO' not in frame['path'] for frame in keyframes)
+
+          print(f"manifest_ok ocr_ok compact_artifacts_ok privacy_invariants_ok keyframes={len(keyframes)}")
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: |
+          rm -rf tmp output
+
+      - name: Verify clean workspace
+        if: always()
+        run: |
+          test -z "$(git status --porcelain)"

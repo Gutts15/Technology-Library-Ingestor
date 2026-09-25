@@ -1,0 +1,229 @@
+name: Audio smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/audio_ingest.py"
+      - "src/audio_bridge.py"
+      - "src/transcription_engine.py"
+      - "src/evidence_compactor.py"
+      - "src/media_router.py"
+      - "src/process_record.py"
+      - "requirements-transcription.txt"
+      - ".github/workflows/audio-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-audio-test
+  cancel-in-progress: false
+
+jobs:
+  audio-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+      TL_TEST_CANARY: TL_AUDIO_CANARY_DO_NOT_LEAK_487aa2f1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install local audio tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng rclone
+          python3 -m pip install --disable-pip-version-check -r requirements-transcription.txt
+
+      - name: Validate MIME routing and transcript quality states
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'src')
+          from audio_bridge import ingest_suffix
+          from audio_ingest import build_quality
+
+          assert ingest_suffix({'Name': 'no-extension', 'MimeType': 'audio/mpeg'}) == '.mp3'
+          assert ingest_suffix({'Name': 'no-extension', 'MimeType': 'audio/mp4'}) == '.m4a'
+
+          empty = {
+              'segments': 0,
+              'segments_with_metrics': 0,
+              'suspect_segments': 0,
+              'suspect_ratio': None,
+              'detected_language': None,
+              'language_probability': None,
+              'mean_avg_logprob': None,
+              'mean_no_speech_prob': None,
+          }
+          assert build_quality(requested=False, stats=empty, warnings=[])['basis'] == 'not_requested'
+          assert build_quality(
+              requested=True, stats=empty, warnings=['transcription_skipped_duration_limit']
+          )['basis'] == 'duration_limit'
+          assert build_quality(
+              requested=True, stats=empty, warnings=['transcription_unavailable']
+          )['basis'] == 'transcription_unavailable_or_failed'
+          assert build_quality(
+              requested=True, stats=empty, warnings=['transcription_failed']
+          )['basis'] == 'transcription_unavailable_or_failed'
+          print('audio_quality_states_ok mime_only_audio_ok')
+          PY
+
+      - name: Create mixed audio inbox
+        run: |
+          mkdir -p tmp/fake-storage/99_INBOX/DROP_HERE tmp/sources
+          espeak-ng -v en -s 135 -w tmp/sources/PRIVATE_SPEECH.wav \
+            "hello technology library audio pipeline one two three four"
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i "sine=frequency=440:duration=90" \
+            -ar 44100 -ac 1 tmp/sources/PRIVATE_LONG.wav
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i "sine=frequency=660:duration=2" \
+            -c:a wmav2 tmp/sources/PRIVATE_UNSUPPORTED.wma
+          cp tmp/sources/* tmp/fake-storage/99_INBOX/DROP_HERE/
+
+      - name: Route unified inbox
+        run: |
+          python3 src/media_router.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --source "99_INBOX/DROP_HERE" \
+            > tmp/router.log 2>&1
+          grep -q "router_ok" tmp/router.log
+          grep -q "audio=3" tmp/router.log
+
+      - name: Run Audio V1 bridge without transcription
+        run: |
+          mkdir -p tmp/audio-work
+          python3 src/audio_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --workspace tmp/audio-work \
+            --provider rclone_test \
+            --batch-size 10 \
+            > tmp/audio-bridge.log 2>&1
+          grep -q "audio_bridge_ok" tmp/audio-bridge.log
+          grep -q "processed=2" tmp/audio-bridge.log
+          grep -q "errors=0" tmp/audio-bridge.log
+
+      - name: Validate packages previews privacy and unsupported preservation
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          canary = os.environ['TL_TEST_CANARY']
+          root = Path('tmp/fake-storage/99_INBOX')
+          ready = root / 'READY_FOR_ANALYSIS'
+          packages = [path for path in ready.iterdir() if path.is_dir()]
+          assert len(packages) == 2
+
+          durations = []
+          for package in packages:
+              for required in (
+                  'ingest.json', 'checkpoint.json', 'audio-index.json',
+                  'evidence-summary.json', 'preview.opus', 'process-record.json',
+              ):
+                  path = package / required
+                  assert path.is_file() and path.stat().st_size > 0
+
+              summary_path = package / 'evidence-summary.json'
+              assert summary_path.stat().st_size <= 3072
+              summary = json.loads(summary_path.read_text())
+              index = json.loads((package / 'audio-index.json').read_text())
+              manifest = json.loads((package / 'ingest.json').read_text())
+              record = json.loads((package / 'process-record.json').read_text())
+
+              assert summary['source']['provider'] == 'rclone_test'
+              assert 'name' not in summary['source']
+              assert summary['quality']['transcript']['basis'] == 'not_requested'
+              assert summary['quality']['transcript']['signal'] == 'unknown'
+              assert index['privacy']['embedded_metadata_exported'] is False
+              assert index['privacy']['preview_metadata_stripped'] is True
+              assert manifest['artifacts']['preview'] == 'preview.opus'
+              assert record['processing']['status'] == 'processed'
+              assert record['routing']['destination_folder'] == '99_INBOX/PROCESSED/AUDIO'
+              durations.append(float(index['audio']['duration_seconds']))
+
+              if float(index['audio']['duration_seconds']) > 60:
+                  assert len(index['preview']['intervals']) == 3
+              else:
+                  assert len(index['preview']['intervals']) == 1
+
+          assert min(durations) < 20
+          assert max(durations) >= 89
+          assert (root / 'PROCESSED/AUDIO/PRIVATE_SPEECH.wav').is_file()
+          assert (root / 'PROCESSED/AUDIO/PRIVATE_LONG.wav').is_file()
+          assert (root / 'TO_REVIEW/AUDIO/PRIVATE_UNSUPPORTED.wma').is_file()
+          assert not (root / 'PROCESSED/AUDIO/PRIVATE_UNSUPPORTED.wma').exists()
+
+          logs = Path('tmp/router.log').read_text() + Path('tmp/audio-bridge.log').read_text()
+          assert 'PRIVATE_' not in logs
+          assert canary not in logs
+          for package in packages:
+              assert canary not in (package / 'evidence-summary.json').read_text()
+          print('audio_bridge_e2e_ok distributed_preview_ok unsupported_preserved privacy_ok')
+          PY
+
+      - name: Validate real tiny transcription on short speech
+        run: |
+          mkdir -p tmp/transcribed
+          python3 src/audio_ingest.py \
+            tmp/sources/PRIVATE_SPEECH.wav \
+            --out tmp/transcribed \
+            --source-id synthetic-speech \
+            --transcribe \
+            --whisper-model tiny \
+            --language en \
+            > tmp/audio-transcribe.log 2>&1
+          grep -q "audio_ingest_ok" tmp/audio-transcribe.log
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          canary = os.environ['TL_TEST_CANARY']
+          out = Path('tmp/transcribed')
+          summary = json.loads((out / 'evidence-summary.json').read_text())
+          transcript = json.loads((out / 'transcript.json').read_text())
+          quality = summary['quality']['transcript']
+
+          assert len(transcript['segments']) >= 1
+          assert quality['basis'] not in {
+              'not_requested', 'duration_limit', 'transcription_unavailable_or_failed'
+          }
+          assert quality['signal'] in {'low', 'medium', 'high'}
+          assert (out / 'transcript.md').is_file()
+          assert (out / 'preview.opus').is_file()
+          assert (out / 'evidence-summary.json').stat().st_size <= 3072
+
+          log = Path('tmp/audio-transcribe.log').read_text()
+          assert 'PRIVATE_SPEECH.wav' not in log
+          assert canary not in log
+          print('audio_transcription_ok quality_metrics_ok privacy_ok')
+          PY
+
+      - name: Re-run bridge idempotently with unsupported audio pending
+        run: |
+          rm -rf tmp/audio-work-rerun
+          mkdir -p tmp/audio-work-rerun
+          python3 src/audio_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --workspace tmp/audio-work-rerun \
+            --provider rclone_test \
+            --batch-size 10 \
+            > tmp/audio-rerun.log 2>&1
+          grep -q "audio_bridge_ok pending=0 selected=0 processed=0 finalized=0 errors=0" tmp/audio-rerun.log
+          test -f tmp/fake-storage/99_INBOX/TO_REVIEW/AUDIO/PRIVATE_UNSUPPORTED.wma
+          ! grep -q "PRIVATE_" tmp/audio-rerun.log
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

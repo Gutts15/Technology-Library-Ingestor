@@ -1,0 +1,33 @@
+name: Public runtime smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "requirements-*.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Compile public runtime
+        run: python3 -m compileall -q src scripts
+      - name: Run security gate
+        run: python3 scripts/security_gate.py
+      - name: Run alignment guard
+        run: python3 src/project_alignment_guard.py
+      - name: Verify clean workspace
+        run: test -z "$(git status --porcelain)"

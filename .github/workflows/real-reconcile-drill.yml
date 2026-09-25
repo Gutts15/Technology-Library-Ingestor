@@ -1,0 +1,220 @@
+name: Real storage reconcile drill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never overlap a real ingest/failover operation.
+concurrency:
+  group: technology-library-private-storage-ingest
+  cancel-in-progress: false
+
+jobs:
+  reconcile-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Configure real primary and standby
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+          TL_STORAGE_PROVIDER: ${{ secrets.TL_STORAGE_PROVIDER }}
+          TL_RCLONE_BACKUP_CONFIG: ${{ secrets.TL_RCLONE_BACKUP_CONFIG }}
+          TL_STORAGE_BACKUP_PROVIDER: ${{ secrets.TL_STORAGE_BACKUP_PROVIDER }}
+          TL_GOOGLE_CLIENT_ID: ${{ secrets.TL_GOOGLE_CLIENT_ID }}
+          TL_GOOGLE_CLIENT_SECRET: ${{ secrets.TL_GOOGLE_CLIENT_SECRET }}
+          TL_GOOGLE_TOKEN: ${{ secrets.TL_GOOGLE_TOKEN }}
+          TL_GOOGLE_ROOT_FOLDER_ID: ${{ secrets.TL_GOOGLE_ROOT_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          CONFIG_FILE="${RUNNER_TEMP}/tl-reconcile-drill-rclone.conf"
+          umask 077
+          : > "${CONFIG_FILE}"
+
+          if [ -n "${TL_RCLONE_CONFIG:-}" ]; then
+            printf '%s' "${TL_RCLONE_CONFIG}" > "${CONFIG_FILE}"
+            PRIMARY_PROVIDER="${TL_STORAGE_PROVIDER:-rclone}"
+          else
+            test -n "${TL_GOOGLE_CLIENT_ID:-}"
+            test -n "${TL_GOOGLE_CLIENT_SECRET:-}"
+            test -n "${TL_GOOGLE_TOKEN:-}"
+            test -n "${TL_GOOGLE_ROOT_FOLDER_ID:-}"
+            cat > "${CONFIG_FILE}" <<EOF
+          [tl]
+          type = drive
+          client_id = ${TL_GOOGLE_CLIENT_ID}
+          client_secret = ${TL_GOOGLE_CLIENT_SECRET}
+          token = ${TL_GOOGLE_TOKEN}
+          scope = drive
+          root_folder_id = ${TL_GOOGLE_ROOT_FOLDER_ID}
+          EOF
+            PRIMARY_PROVIDER="google_drive"
+          fi
+
+          test -n "${TL_RCLONE_BACKUP_CONFIG:-}"
+          printf '\n%s\n' "${TL_RCLONE_BACKUP_CONFIG}" >> "${CONFIG_FILE}"
+          BACKUP_PROVIDER="${TL_STORAGE_BACKUP_PROVIDER:-onedrive}"
+
+          DRILL_BASE="99_INBOX/PROCESS_LOG/STORAGE/DRILLS/${GITHUB_RUN_ID}-reconcile"
+          {
+            echo "RCLONE_CONFIG=${CONFIG_FILE}"
+            echo "TL_PRIMARY_PROVIDER=${PRIMARY_PROVIDER}"
+            echo "TL_BACKUP_PROVIDER=${BACKUP_PROVIDER}"
+            echo "TL_DRILL_BASE=${DRILL_BASE}"
+            echo "TL_DRILL_PRIMARY=tl:${DRILL_BASE}/primary"
+            echo "TL_DRILL_BACKUP=tl_backup:${DRILL_BASE}/backup"
+          } >> "${GITHUB_ENV}"
+
+      - name: Verify real providers are healthy
+        run: |
+          set -euo pipefail
+          python3 src/storage_preflight.py --remote "tl:"
+          python3 src/storage_preflight.py --remote "tl_backup:"
+
+      - name: Build isolated divergent failover sandbox
+        run: |
+          set -euo pipefail
+          rclone mkdir "${TL_DRILL_PRIMARY}/STATE" --log-level ERROR
+          rclone mkdir "${TL_DRILL_PRIMARY}/QUEUE" --log-level ERROR
+          rclone mkdir "${TL_DRILL_PRIMARY}/META" --log-level ERROR
+          rclone mkdir "${TL_DRILL_BACKUP}/STATE" --log-level ERROR
+          rclone mkdir "${TL_DRILL_BACKUP}/QUEUE" --log-level ERROR
+          rclone mkdir "${TL_DRILL_BACKUP}/META" --log-level ERROR
+
+          printf 'PRIMARY_DRILL_STALE\n' > "${RUNNER_TEMP}/primary-current.txt"
+          printf 'PRIMARY_DRILL_ONLY\n' > "${RUNNER_TEMP}/primary-only.txt"
+          printf 'BACKUP_DRILL_AUTHORITATIVE_WITH_DIFFERENT_SIZE\n' > "${RUNNER_TEMP}/backup-current.txt"
+          printf 'BACKUP_DRILL_NEW_DURING_FAILOVER\n' > "${RUNNER_TEMP}/backup-new.txt"
+
+          rclone copyto "${RUNNER_TEMP}/primary-current.txt" "${TL_DRILL_PRIMARY}/STATE/current.txt" --log-level ERROR --stats 0
+          rclone copyto "${RUNNER_TEMP}/primary-only.txt" "${TL_DRILL_PRIMARY}/STATE/primary-only.txt" --log-level ERROR --stats 0
+          rclone copyto "${RUNNER_TEMP}/backup-current.txt" "${TL_DRILL_BACKUP}/STATE/current.txt" --log-level ERROR --stats 0
+          rclone copyto "${RUNNER_TEMP}/backup-new.txt" "${TL_DRILL_BACKUP}/QUEUE/new-during-failover.txt" --log-level ERROR --stats 0
+
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          payload = {
+              'schema_version': 1,
+              'selector_version': '0.1.1',
+              'active': True,
+              'activated_at': datetime.now(timezone.utc).isoformat(),
+              'reason': 'controlled_reconcile_drill',
+          }
+          Path(os.environ['RUNNER_TEMP']).joinpath('drill-lock.json').write_text(
+              json.dumps(payload) + '\n', encoding='utf-8'
+          )
+          PY
+          rclone copyto "${RUNNER_TEMP}/drill-lock.json" "${TL_DRILL_BACKUP}/META/failover-active.json" --log-level ERROR --stats 0
+
+      - name: Reconcile isolated real standby sandbox to real primary sandbox
+        run: |
+          set -euo pipefail
+          python3 src/storage_reconcile.py \
+            --primary "${TL_DRILL_PRIMARY}" \
+            --backup "${TL_DRILL_BACKUP}" \
+            --primary-provider "${TL_PRIMARY_PROVIDER}" \
+            --backup-provider "${TL_BACKUP_PROVIDER}" \
+            --scope STATE \
+            --scope QUEUE \
+            --failover-lock META/failover-active.json \
+            --replication-state META/replication-state.json \
+            --reconcile-state META/reconciliation-state.json \
+            --quarantine-root QUARANTINE \
+            --skip-replication-marker \
+            --auto \
+            > "${RUNNER_TEMP}/reconcile-drill.log" 2>&1
+          grep -q "storage_reconcile_ok version=0.1.0 scopes=2 deep=0 quarantine=1" "${RUNNER_TEMP}/reconcile-drill.log"
+
+      - name: Validate real reconciliation result
+        run: |
+          set -euo pipefail
+          rclone check "${TL_DRILL_BACKUP}/STATE" "${TL_DRILL_PRIMARY}/STATE" --download --log-level ERROR --stats 0 > /dev/null 2>&1
+          rclone check "${TL_DRILL_BACKUP}/QUEUE" "${TL_DRILL_PRIMARY}/QUEUE" --download --log-level ERROR --stats 0 > /dev/null 2>&1
+
+          rclone cat "${TL_DRILL_PRIMARY}/STATE/current.txt" --log-level ERROR | grep -q '^BACKUP_DRILL_AUTHORITATIVE_WITH_DIFFERENT_SIZE$'
+          rclone cat "${TL_DRILL_PRIMARY}/QUEUE/new-during-failover.txt" --log-level ERROR | grep -q '^BACKUP_DRILL_NEW_DURING_FAILOVER$'
+
+          if rclone cat "${TL_DRILL_PRIMARY}/STATE/primary-only.txt" --log-level ERROR > /dev/null 2>&1; then
+            echo "real_reconcile_drill_error code=primary_only_not_quarantined"
+            exit 1
+          fi
+          rclone lsf "${TL_DRILL_PRIMARY}/QUARANTINE" --recursive --files-only --log-level ERROR | grep -q 'primary-only.txt'
+
+          if rclone cat "${TL_DRILL_BACKUP}/META/failover-active.json" --log-level ERROR > /dev/null 2>&1; then
+            echo "real_reconcile_drill_error code=backup_lock_still_active"
+            exit 1
+          fi
+
+          rclone cat "${TL_DRILL_PRIMARY}/META/reconciliation-state.json" --log-level ERROR > "${RUNNER_TEMP}/primary-reconcile-state.json"
+          rclone cat "${TL_DRILL_BACKUP}/META/reconciliation-state.json" --log-level ERROR > "${RUNNER_TEMP}/backup-reconcile-state.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          primary = json.loads((root / 'primary-reconcile-state.json').read_text())
+          backup = json.loads((root / 'backup-reconcile-state.json').read_text())
+          assert primary == backup
+          assert primary['status'] == 'complete'
+          assert primary['scope_count'] == 2
+          assert primary['quarantine_policy'] == 'preserve_displaced_primary_v1'
+          PY
+          echo "real_reconcile_drill_ok"
+
+      - name: Confirm production roots were never selected as reconcile targets
+        run: |
+          set -euo pipefail
+          case "${TL_DRILL_PRIMARY}" in
+            tl:99_INBOX/PROCESS_LOG/STORAGE/DRILLS/*-reconcile/primary) ;;
+            *) exit 1 ;;
+          esac
+          case "${TL_DRILL_BACKUP}" in
+            tl_backup:99_INBOX/PROCESS_LOG/STORAGE/DRILLS/*-reconcile/backup) ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Remove isolated real-provider sandbox
+        if: always()
+        run: |
+          set +e
+          if [ -n "${TL_DRILL_BASE:-}" ] && [ -n "${RCLONE_CONFIG:-}" ]; then
+            case "${TL_DRILL_BASE}" in
+              99_INBOX/PROCESS_LOG/STORAGE/DRILLS/*-reconcile)
+                rclone purge "tl:${TL_DRILL_BASE}" --log-level ERROR || true
+                rclone purge "tl_backup:${TL_DRILL_BASE}" --log-level ERROR || true
+                ;;
+            esac
+          fi
+
+      - name: Remove temporary configuration and drill files
+        if: always()
+        run: |
+          rm -f \
+            "${RUNNER_TEMP}/tl-reconcile-drill-rclone.conf" \
+            "${RUNNER_TEMP}/primary-current.txt" \
+            "${RUNNER_TEMP}/primary-only.txt" \
+            "${RUNNER_TEMP}/backup-current.txt" \
+            "${RUNNER_TEMP}/backup-new.txt" \
+            "${RUNNER_TEMP}/drill-lock.json" \
+            "${RUNNER_TEMP}/reconcile-drill.log" \
+            "${RUNNER_TEMP}/primary-reconcile-state.json" \
+            "${RUNNER_TEMP}/backup-reconcile-state.json"
+
+      - name: Verify clean repository workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

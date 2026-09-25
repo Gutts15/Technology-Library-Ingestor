@@ -1,0 +1,122 @@
+name: Curation handoff smoke test
+
+on:
+  push:
+    paths:
+      - "src/curation_handoff.py"
+      - ".github/workflows/curation-handoff-smoke-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build sanitized READY fixture
+        run: |
+          set -euo pipefail
+          ROOT="${RUNNER_TEMP}/storage"
+          mkdir -p "${ROOT}/99_INBOX/CURATION/READY_INDEX"
+          cat > "${ROOT}/99_INBOX/CURATION/READY_INDEX/latest.json" <<'JSON'
+          {
+            "schema_version": 1,
+            "index_version": "0.1.1",
+            "items": [
+              {
+                "package_id": "0123456789abcdefabcd",
+                "kind": "video",
+                "complete": true,
+                "eligible_for_analysis": true,
+                "pipeline_version": "0.5.0",
+                "compactor_version": "0.6.2",
+                "evidence_bytes": 900,
+                "evidence_path": "99_INBOX/READY_FOR_ANALYSIS/0123456789abcdefabcd/evidence-summary.json",
+                "detail_path": "99_INBOX/READY_FOR_ANALYSIS/0123456789abcdefabcd/timeline.md",
+                "preview_path": "99_INBOX/READY_FOR_ANALYSIS/0123456789abcdefabcd/contact-sheet.jpg",
+                "source_name": "forbidden-private-name.mp4",
+                "evidence_text": "FORBIDDEN_PRIVATE_EVIDENCE"
+              },
+              {
+                "package_id": "fedcba98765432100123",
+                "kind": "document",
+                "complete": true,
+                "eligible_for_analysis": true,
+                "pipeline_version": "0.3.0",
+                "compactor_version": "0.2.0",
+                "evidence_bytes": 700,
+                "evidence_path": "99_INBOX/READY_FOR_ANALYSIS/fedcba98765432100123/evidence-summary.json",
+                "detail_path": "99_INBOX/READY_FOR_ANALYSIS/fedcba98765432100123/content-index.json",
+                "preview_path": null
+              }
+            ]
+          }
+          JSON
+          echo "TL_ROOT=${ROOT}" >> "${GITHUB_ENV}"
+
+      - name: Initialize two pending packages
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/curation_handoff.py --root-dir "${TL_ROOT}" --max-handoff 50)"
+          echo "${OUT}"
+          grep -q 'ready=2 pending=2 analyzed=0 rejected=0 do_not_reprocess=0 handoff=2 reopened=0 transitions=0 persisted=1' <<<"${OUT}"
+
+      - name: Mark one analyzed and one terminal
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/curation_handoff.py --root-dir "${TL_ROOT}" \
+            --transition 0123456789abcdefabcd=analyzed \
+            --transition fedcba98765432100123=do_not_reprocess)"
+          echo "${OUT}"
+          grep -q 'pending=0 analyzed=1 rejected=0 do_not_reprocess=1 handoff=0 reopened=0 transitions=2 persisted=1' <<<"${OUT}"
+
+      - name: Revised analyzed evidence reopens but terminal state stays closed
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ['TL_ROOT']) / '99_INBOX/CURATION/READY_INDEX/latest.json'
+          data = json.loads(p.read_text(encoding='utf-8'))
+          data['items'][0]['pipeline_version'] = '0.5.1'
+          data['items'][1]['pipeline_version'] = '0.3.1'
+          p.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+          PY
+          OUT="$(python3 src/curation_handoff.py --root-dir "${TL_ROOT}")"
+          echo "${OUT}"
+          grep -q 'pending=1 analyzed=0 rejected=0 do_not_reprocess=1 handoff=1 reopened=1 transitions=0 persisted=1' <<<"${OUT}"
+
+      - name: Repeated refresh is idempotent and privacy-safe
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/curation_handoff.py --root-dir "${TL_ROOT}")"
+          echo "${OUT}"
+          grep -q 'pending=1 analyzed=0 rejected=0 do_not_reprocess=1 handoff=1 reopened=0 transitions=0 persisted=1' <<<"${OUT}"
+          STATE="${TL_ROOT}/99_INBOX/CURATION/STATE/latest.json"
+          HANDOFF="${TL_ROOT}/99_INBOX/CURATION/HANDOFF/latest.json"
+          test -s "${STATE}"
+          test -s "${HANDOFF}"
+          ! grep -q 'forbidden-private-name.mp4' "${STATE}" "${HANDOFF}"
+          ! grep -q 'FORBIDDEN_PRIVATE_EVIDENCE' "${STATE}" "${HANDOFF}"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          state = json.loads((root/'99_INBOX/CURATION/STATE/latest.json').read_text())
+          handoff = json.loads((root/'99_INBOX/CURATION/HANDOFF/latest.json').read_text())
+          assert state['counts'] == {'pending': 1, 'analyzed': 0, 'rejected': 0, 'do_not_reprocess': 1}
+          assert handoff['pending_total'] == 1
+          assert handoff['selected'] == 1
+          assert len(handoff['items']) == 1
+          PY
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

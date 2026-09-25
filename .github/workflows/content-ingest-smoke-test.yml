@@ -1,0 +1,201 @@
+name: Text and document smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/text_document_ingest.py"
+      - "src/text_document_bridge.py"
+      - "src/media_router.py"
+      - "src/process_record.py"
+      - ".github/workflows/content-ingest-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-content-smoke
+  cancel-in-progress: false
+
+jobs:
+  content-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+      TL_TEST_CANARY: TL_CONTENT_CANARY_DO_NOT_LEAK_6745b6
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install local tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone poppler-utils
+
+      - name: Create mixed unified inbox
+        run: |
+          mkdir -p tmp/fake/99_INBOX/DROP_HERE tmp/workspace
+          cat > tmp/fake/99_INBOX/DROP_HERE/PRIVATE_NOTE.md <<'EOF'
+          # Technology Library Test
+          This markdown contains AlphaMarker and a reusable pipeline note.
+          EOF
+          cat > tmp/fake/99_INBOX/DROP_HERE/PRIVATE_SCRIPT.py <<'EOF'
+          def library_test():
+              return "CodeMarker"
+          EOF
+          printf 'legacy format preserved' > tmp/fake/99_INBOX/DROP_HERE/PRIVATE_LEGACY.doc
+
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+
+          root = Path('tmp/fake/99_INBOX/DROP_HERE')
+
+          docx_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:body><w:p><w:r><w:t>DocxMarker Technology Library document</w:t></w:r></w:p></w:body>
+          </w:document>'''
+          with ZipFile(root / 'PRIVATE_DOCUMENT.docx', 'w', ZIP_DEFLATED) as z:
+              z.writestr('word/document.xml', docx_xml)
+
+          pptx_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                 xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>PptxMarker Technology Library slide</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+          </p:sld>'''
+          with ZipFile(root / 'PRIVATE_SLIDES.pptx', 'w', ZIP_DEFLATED) as z:
+              z.writestr('ppt/slides/slide1.xml', pptx_xml)
+
+          def make_pdf(path: Path, text: str):
+              objects = [
+                  b'<< /Type /Catalog /Pages 2 0 R >>',
+                  b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+                  b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+                  None,
+                  b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+              ]
+              stream = f'BT /F1 12 Tf 72 720 Td ({text}) Tj ET'.encode('ascii')
+              objects[3] = b'<< /Length ' + str(len(stream)).encode() + b' >>\nstream\n' + stream + b'\nendstream'
+              data = bytearray(b'%PDF-1.4\n')
+              offsets = [0]
+              for i, obj in enumerate(objects, start=1):
+                  offsets.append(len(data))
+                  data.extend(f'{i} 0 obj\n'.encode())
+                  data.extend(obj)
+                  data.extend(b'\nendobj\n')
+              xref = len(data)
+              data.extend(f'xref\n0 {len(objects)+1}\n'.encode())
+              data.extend(b'0000000000 65535 f \n')
+              for offset in offsets[1:]:
+                  data.extend(f'{offset:010d} 00000 n \n'.encode())
+              data.extend(f'trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+              path.write_bytes(data)
+
+          make_pdf(root / 'PRIVATE_MANUAL.pdf', 'PdfMarker Technology Library manual')
+          PY
+
+      - name: Route unified inbox
+        run: |
+          python3 src/media_router.py --remote "fake:$(pwd)/tmp/fake" > tmp/router.log 2>&1
+          grep -q "media_router_ok scanned=6" tmp/router.log
+          grep -q "documents=4" tmp/router.log
+          grep -q "text=2" tmp/router.log
+
+      - name: Run text and document bridge
+        run: |
+          python3 src/text_document_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            --workspace tmp/workspace \
+            --provider rclone_test \
+            --batch-size 10 \
+            > tmp/content.log 2>&1
+          grep -q "content_bridge_ok pending=5 processed=5 finalized=0 errors=0" tmp/content.log
+
+      - name: Validate packages routing and privacy
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path('tmp/fake/99_INBOX')
+          ready = root / 'READY_FOR_ANALYSIS'
+          records = root / 'PROCESS_LOG/RECORDS'
+          processed_text = root / 'PROCESSED/TEXT'
+          processed_docs = root / 'PROCESSED/DOCUMENTS'
+          pending_docs = root / 'TO_REVIEW/DOCUMENTS'
+
+          assert {p.name for p in processed_text.iterdir()} == {'PRIVATE_NOTE.md', 'PRIVATE_SCRIPT.py'}
+          assert {p.name for p in processed_docs.iterdir()} == {'PRIVATE_MANUAL.pdf', 'PRIVATE_DOCUMENT.docx', 'PRIVATE_SLIDES.pptx'}
+          assert {p.name for p in pending_docs.iterdir()} == {'PRIVATE_LEGACY.doc'}
+
+          packages = sorted(p for p in ready.iterdir() if p.is_dir())
+          assert len(packages) == 5
+          assert len(list(records.glob('*.json'))) == 5
+
+          expected_markers = {'AlphaMarker', 'CodeMarker', 'PdfMarker', 'DocxMarker', 'PptxMarker'}
+          found = set()
+          private_names = {
+              'PRIVATE_NOTE.md', 'PRIVATE_SCRIPT.py', 'PRIVATE_MANUAL.pdf',
+              'PRIVATE_DOCUMENT.docx', 'PRIVATE_SLIDES.pptx', 'PRIVATE_LEGACY.doc',
+          }
+
+          for package in packages:
+              assert re.fullmatch(r'[0-9a-f]{20}', package.name)
+              for required in ('ingest.json', 'checkpoint.json', 'content-index.json', 'evidence-summary.json', 'process-record.json'):
+                  assert (package / required).is_file()
+
+              evidence_path = package / 'evidence-summary.json'
+              evidence = json.loads(evidence_path.read_text())
+              manifest = json.loads((package / 'ingest.json').read_text())
+              record = json.loads((package / 'process-record.json').read_text())
+              central = json.loads((records / f'{package.name}.json').read_text())
+
+              assert evidence_path.stat().st_size <= 3072
+              assert evidence['source']['provider'] == 'rclone_test'
+              assert 'name' not in evidence['source']
+              assert manifest['source']['provider'] == 'rclone_test'
+              assert manifest['source']['name'] in private_names
+              assert record == central
+              assert record['processing']['status'] == 'processed'
+              assert record['processing']['pipeline_version'] == '0.1.0'
+
+              chunk_text = ''.join(p.read_text() for p in sorted((package / 'chunks').glob('*.txt')))
+              for marker in expected_markers:
+                  if marker in chunk_text:
+                      found.add(marker)
+
+              raw_evidence = evidence_path.read_text()
+              for private_name in private_names:
+                  assert private_name not in raw_evidence
+
+          assert found == expected_markers
+
+          logs = Path('tmp/router.log').read_text() + Path('tmp/content.log').read_text()
+          for private_name in private_names:
+              assert private_name not in logs
+          assert os.environ['TL_TEST_CANARY'] not in logs
+          print('content_packages_ok routing_ok compact_evidence_ok log_privacy_ok')
+          PY
+
+      - name: Re-run idempotently with only unsupported legacy document pending
+        run: |
+          rm -rf tmp/workspace-second
+          python3 src/text_document_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            --workspace tmp/workspace-second \
+            --provider rclone_test \
+            --batch-size 10 \
+            > tmp/content-second.log 2>&1
+          grep -q "content_bridge_ok pending=0 processed=0 finalized=0 errors=0" tmp/content-second.log
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

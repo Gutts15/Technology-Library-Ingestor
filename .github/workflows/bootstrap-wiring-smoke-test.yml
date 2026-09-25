@@ -1,0 +1,246 @@
+name: Bootstrap wiring smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/ready_index.py"
+      - "src/curation_handoff.py"
+      - "src/run_report.py"
+      - "src/run_metrics.py"
+      - "src/cadence_assess.py"
+      - "src/storage_failover.py"
+      - "src/storage_replica.py"
+      - "src/storage_reconcile.py"
+      - ".github/workflows/drive-ingest.yml"
+      - ".github/workflows/bootstrap-wiring-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-bootstrap-wiring-test
+  cancel-in-progress: false
+
+jobs:
+  bootstrap-wiring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Validate bootstrap standby failback ready index curation observability and trigger policy
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/drive-ingest.yml')
+          text = path.read_text(encoding='utf-8')
+
+          header = text[:text.index('permissions:')]
+          assert 'workflow_dispatch:' in header
+          assert 'workflow_call:' in header
+          schedule_token = 'schedule' + ':'
+          assert schedule_token not in header
+
+          timing = text.index('- name: Initialize sanitized run timing')
+          minimal = text.index('- name: Install minimal storage tooling')
+          configure = text.index('- name: Configure private storage')
+          failback = text.index('- name: Reconcile recovered primary before failback')
+          selector = text.index('- name: Select active private storage')
+          pre_replica = text.index('- name: Replicate fresh ingress to standby')
+          reconcile = text.index('- name: Reconcile retryable ingest state across queues')
+          router = text.index('- name: Route unified DROP_HERE inbox')
+          planner = text.index('- name: Plan bounded multi-pipeline workload')
+          system_deps = text.index('- name: Install planned system dependencies')
+          transcription_deps = text.index('- name: Install planned transcription dependencies')
+          spreadsheet_deps = text.index('- name: Install planned spreadsheet dependencies')
+          first_processor = text.index('- name: Run offline link ingestion')
+          last_processor = text.index('- name: Run selective spreadsheet ingestion')
+          ready_index = text.index('- name: Refresh compact READY index')
+          curation = text.index('- name: Refresh curation handoff state')
+          telemetry = text.index('- name: Persist sanitized run telemetry')
+          metrics = text.index('- name: Refresh sanitized aggregate run metrics')
+          cadence = text.index('- name: Assess zero-touch cadence readiness')
+          post_replica = text.index('- name: Replicate final critical state to standby')
+          cleanup = text.index('- name: Remove temporary processing data')
+
+          assert timing < minimal < configure < failback < selector < pre_replica < reconcile < router < planner
+          assert planner < system_deps < first_processor
+          assert planner < transcription_deps < first_processor
+          assert planner < spreadsheet_deps < first_processor
+          assert first_processor <= last_processor < ready_index < curation < telemetry < metrics < cadence < post_replica < cleanup
+
+          pre_plan = text[:planner]
+          for forbidden in (
+              'ffmpeg',
+              'tesseract-ocr',
+              'poppler-utils',
+              'requirements-transcription.txt',
+              'requirements-spreadsheet.txt',
+          ):
+              assert forbidden not in pre_plan, f'heavy dependency before planner: {forbidden}'
+
+          assert 'sudo apt-get install -y rclone' in pre_plan
+          assert 'Install system tools' not in text
+          assert 'Install pinned Python dependencies' not in text
+
+          configure_block = text[configure:failback]
+          for required in (
+              'TL_RCLONE_BACKUP_CONFIG',
+              'TL_STORAGE_BACKUP_PROVIDER',
+              'TL_BACKUP_CONFIGURED',
+          ):
+              assert required in configure_block, f'missing standby configure invariant: {required}'
+
+          failback_block = text[failback:selector]
+          for required in (
+              "if: env.TL_BACKUP_CONFIGURED == '1'",
+              'src/storage_reconcile.py',
+              '--primary "tl:"',
+              '--backup "tl_backup:"',
+              '--auto',
+              'storage_reconcile_auto_result=reconciled',
+              'storage_reconcile_auto_result=skip',
+              'TL_FAILBACK_RECONCILED=1',
+              'tl-storage-reconcile.log',
+          ):
+              assert required in failback_block, f'missing auto-failback invariant: {required}'
+          assert 'continue-on-error: true' not in failback_block
+
+          selector_block = text[selector:pre_replica]
+          for required in (
+              'src/storage_failover.py',
+              '--primary "tl:"',
+              '--backup "tl_backup:"',
+              '--max-backup-age-hours 24',
+              'tl-active-storage.env',
+              'TL_STORAGE_ENV',
+              'GITHUB_ENV',
+          ):
+              assert required in selector_block, f'missing storage selector invariant: {required}'
+
+          pre_replica_block = text[pre_replica:reconcile]
+          for required in (
+              "if: env.TL_BACKUP_CONFIGURED == '1' && env.TL_STORAGE_MODE == 'primary'",
+              'continue-on-error: true',
+              'src/storage_replica.py',
+              '--source "tl:"',
+              '--destination "tl_backup:"',
+              '--phase pre',
+          ):
+              assert required in pre_replica_block, f'missing pre-replica invariant: {required}'
+
+          post_plan = text[planner:]
+          for required in (
+              'TL_PLAN_IMAGE_BATCH',
+              'TL_PLAN_AUDIO_BATCH',
+              'TL_PLAN_VIDEO_BATCH',
+              'TL_PLAN_CONTENT_BATCH',
+              'TL_PLAN_SPREADSHEET_BATCH',
+              'requirements-transcription.txt',
+              'requirements-spreadsheet.txt',
+              'ffmpeg',
+              'tesseract-ocr',
+              'poppler-utils',
+          ):
+              assert required in post_plan, f'missing planned dependency wiring: {required}'
+
+          active_span = text[reconcile:post_replica]
+          assert '--remote "${TL_ACTIVE_REMOTE}"' in active_span
+          assert '--remote "tl:"' not in active_span
+
+          ready_block = text[ready_index:curation]
+          for required in (
+              'if: always()',
+              'continue-on-error: true',
+              'src/ready_index.py',
+              '--remote "${TL_ACTIVE_REMOTE}"',
+              '--max-packages 100',
+              'tl-ready-index.json',
+          ):
+              assert required in ready_block, f'missing ready-index invariant: {required}'
+
+          curation_block = text[curation:telemetry]
+          for required in (
+              'if: always()',
+              'continue-on-error: true',
+              'src/curation_handoff.py',
+              '--remote "${TL_ACTIVE_REMOTE}"',
+              '--max-handoff 50',
+          ):
+              assert required in curation_block, f'missing curation-handoff invariant: {required}'
+
+          telemetry_block = text[telemetry:metrics]
+          for required in (
+              'if: always()',
+              'continue-on-error: true',
+              'src/run_report.py',
+              'TL_JOB_STATUS',
+              'GITHUB_RUN_ID',
+              'GITHUB_RUN_ATTEMPT',
+              'TL_RUN_STARTED_EPOCH',
+              '--workspace-root',
+              '--remote "${TL_ACTIVE_REMOTE}"',
+          ):
+              assert required in telemetry_block, f'missing telemetry invariant: {required}'
+
+          metrics_block = text[metrics:cadence]
+          for required in (
+              'if: always()',
+              'continue-on-error: true',
+              'src/run_metrics.py',
+              '--remote "${TL_ACTIVE_REMOTE}"',
+              '--max-runs 50',
+              'tl-run-metrics.json',
+          ):
+              assert required in metrics_block, f'missing metrics invariant: {required}'
+
+          cadence_block = text[cadence:post_replica]
+          for required in (
+              'if: always()',
+              'continue-on-error: true',
+              'src/cadence_assess.py',
+              'tl-run-metrics.json',
+              'tl-cadence-readiness.json',
+              '--remote "${TL_ACTIVE_REMOTE}"',
+              'cadence_assess_skip code=metrics_missing',
+          ):
+              assert required in cadence_block, f'missing cadence invariant: {required}'
+
+          post_replica_block = text[post_replica:cleanup]
+          for required in (
+              "if: always() && env.TL_BACKUP_CONFIGURED == '1' && env.TL_STORAGE_MODE == 'primary'",
+              'continue-on-error: true',
+              'src/storage_replica.py',
+              '--source "tl:"',
+              '--destination "tl_backup:"',
+              '--phase post',
+          ):
+              assert required in post_replica_block, f'missing post-replica invariant: {required}'
+
+          cleanup_block = text[cleanup:]
+          for required in (
+              'tl-ready-index.json',
+              'tl-run-report.json',
+              'tl-run-metrics.json',
+              'tl-cadence-readiness.json',
+              'tl-storage-reconcile.log',
+              'tl-active-storage.env',
+              'tl-rclone.conf',
+              'tl-storage.env',
+          ):
+              assert required in cleanup_block
+
+          assert schedule_token not in header
+          forbidden_action = 'upload' + '-' + 'artifact'
+          assert forbidden_action not in text
+
+          print('bootstrap_wiring_ok standby_failover_failback_ready_index_curation_observability_ordering_ok reusable_no_schedule_ok')
+          PY
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

@@ -1,0 +1,242 @@
+name: Storage failover smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/storage_failover.py"
+      - "src/storage_replica.py"
+      - "src/storage_preflight.py"
+      - "src/standby_readiness.py"
+      - ".github/workflows/storage-failover-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-storage-failover-test
+  cancel-in-progress: false
+
+jobs:
+  storage-failover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RCLONE_CONFIG_PRIMARY_TYPE: local
+      RCLONE_CONFIG_BACKUP_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create synthetic primary and standby roots
+        run: |
+          set -euo pipefail
+          PRIMARY="$(pwd)/tmp/primary"
+          BACKUP="$(pwd)/tmp/backup"
+          mkdir -p \
+            "${PRIMARY}/00_LIBRARY" \
+            "${PRIMARY}/99_INBOX/DROP_HERE" \
+            "${PRIMARY}/99_INBOX/TO_REVIEW/VIDEOS" \
+            "${PRIMARY}/99_INBOX/READY_FOR_ANALYSIS/aaaaaaaaaaaaaaaaaaaa" \
+            "${PRIMARY}/99_INBOX/PROCESS_LOG/RECORDS" \
+            "${PRIMARY}/99_INBOX/CURATION" \
+            "${PRIMARY}/99_INBOX/ERROR" \
+            "${PRIMARY}/99_INBOX/PROCESSED/VIDEOS" \
+            "${BACKUP}"
+
+          printf 'PRIVATE_LIBRARY_CANARY\n' > "${PRIMARY}/00_LIBRARY/state.md"
+          printf 'PRIVATE_DROP_CANARY\n' > "${PRIMARY}/99_INBOX/DROP_HERE/private-upload.mp4"
+          printf 'PRIVATE_QUEUE_CANARY\n' > "${PRIMARY}/99_INBOX/TO_REVIEW/VIDEOS/private-pending.mp4"
+          printf '{}\n' > "${PRIMARY}/99_INBOX/READY_FOR_ANALYSIS/aaaaaaaaaaaaaaaaaaaa/evidence-summary.json"
+          printf '{}\n' > "${PRIMARY}/99_INBOX/PROCESS_LOG/RECORDS/aaaaaaaaaaaaaaaaaaaa.json"
+          printf '{}\n' > "${PRIMARY}/99_INBOX/CURATION/state.json"
+          printf 'PRIVATE_ERROR_CANARY\n' > "${PRIMARY}/99_INBOX/ERROR/private-error.txt"
+          printf 'PRIVATE_PROCESSED_CANARY\n' > "${PRIMARY}/99_INBOX/PROCESSED/VIDEOS/private-processed.mp4"
+
+      - name: Replicate critical post-run state
+        run: |
+          python3 src/storage_replica.py \
+            --source "primary:$(pwd)/tmp/primary" \
+            --destination "backup:$(pwd)/tmp/backup" \
+            --phase post \
+            > tmp/replica.log 2>&1
+          grep -q "storage_replica_ok phase=post scopes=7" tmp/replica.log
+
+      - name: Validate standby scope and exclusion policy
+        run: |
+          set -euo pipefail
+          BACKUP="tmp/backup"
+          test -f "${BACKUP}/00_LIBRARY/state.md"
+          test -f "${BACKUP}/99_INBOX/DROP_HERE/private-upload.mp4"
+          test -f "${BACKUP}/99_INBOX/TO_REVIEW/VIDEOS/private-pending.mp4"
+          test -f "${BACKUP}/99_INBOX/READY_FOR_ANALYSIS/aaaaaaaaaaaaaaaaaaaa/evidence-summary.json"
+          test -f "${BACKUP}/99_INBOX/PROCESS_LOG/RECORDS/aaaaaaaaaaaaaaaaaaaa.json"
+          test -f "${BACKUP}/99_INBOX/CURATION/state.json"
+          test -f "${BACKUP}/99_INBOX/ERROR/private-error.txt"
+          test -f "${BACKUP}/99_INBOX/PROCESS_LOG/STORAGE/replication-state.json"
+          test ! -e "${BACKUP}/99_INBOX/PROCESSED"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          state = json.loads(Path('tmp/backup/99_INBOX/PROCESS_LOG/STORAGE/replication-state.json').read_text())
+          assert state['schema_version'] == 1
+          assert state['replica_version'] == '0.1.1'
+          assert state['complete'] is True
+          assert state['phase'] == 'post'
+          assert state['scope_count'] == 7
+          assert state['scope_policy'] == 'critical_state_v1'
+          PY
+
+      - name: Validate read-only readiness on complete post standby
+        run: |
+          python3 src/standby_readiness.py \
+            --remote "backup:$(pwd)/tmp/backup" \
+            --max-backup-age-hours 24 \
+            --require-unlocked \
+            > tmp/readiness.log 2>&1
+          grep -q "standby_readiness_ok" tmp/readiness.log
+          grep -q "full_post=1" tmp/readiness.log
+          grep -q "lock_active=0" tmp/readiness.log
+
+      - name: Select healthy primary
+        run: |
+          python3 src/storage_failover.py \
+            --primary "primary:$(pwd)/tmp/primary" \
+            --backup "backup:$(pwd)/tmp/backup" \
+            --backup-configured \
+            --env-out tmp/primary.env \
+            > tmp/primary-select.log 2>&1
+          grep -q "storage_select_ok mode=primary" tmp/primary-select.log
+          grep -q '^TL_STORAGE_MODE=primary$' tmp/primary.env
+          grep -q '^TL_ACTIVE_REMOTE=primary:' tmp/primary.env
+
+      - name: Fail over only to fresh standby
+        run: |
+          mv tmp/primary tmp/primary-offline
+          python3 src/storage_failover.py \
+            --primary "primary:$(pwd)/tmp/primary" \
+            --backup "backup:$(pwd)/tmp/backup" \
+            --backup-configured \
+            --max-backup-age-hours 24 \
+            --env-out tmp/fallback.env \
+            > tmp/fallback-select.log 2>&1
+          grep -q "storage_select_ok mode=fallback" tmp/fallback-select.log
+          grep -q '^TL_STORAGE_MODE=fallback$' tmp/fallback.env
+          grep -q '^TL_ACTIVE_REMOTE=backup:' tmp/fallback.env
+          test -f tmp/backup/99_INBOX/PROCESS_LOG/STORAGE/failover-active.json
+
+      - name: Keep standby locked after primary returns
+        run: |
+          mv tmp/primary-offline tmp/primary
+          python3 src/storage_failover.py \
+            --primary "primary:$(pwd)/tmp/primary" \
+            --backup "backup:$(pwd)/tmp/backup" \
+            --backup-configured \
+            --env-out tmp/locked.env \
+            > tmp/locked-select.log 2>&1
+          grep -q "storage_select_ok mode=fallback_locked" tmp/locked-select.log
+          grep -q '^TL_STORAGE_MODE=fallback_locked$' tmp/locked.env
+          grep -q '^TL_ACTIVE_REMOTE=backup:' tmp/locked.env
+
+      - name: Reject stale standby
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/stale-backup/00_LIBRARY tmp/stale-backup/99_INBOX/PROCESS_LOG/STORAGE
+          cat > tmp/stale-backup/99_INBOX/PROCESS_LOG/STORAGE/replication-state.json <<'EOF'
+          {
+            "schema_version": 1,
+            "complete": true,
+            "phase": "post",
+            "scope_policy": "critical_state_v1",
+            "scope_count": 7,
+            "completed_at": "2020-01-01T00:00:00+00:00"
+          }
+          EOF
+          set +e
+          python3 src/storage_failover.py \
+            --primary "primary:$(pwd)/tmp/missing-primary" \
+            --backup "backup:$(pwd)/tmp/stale-backup" \
+            --backup-configured \
+            --max-backup-age-hours 24 \
+            --env-out tmp/stale.env \
+            > tmp/stale-select.log 2>&1
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          grep -q "storage_select_error code=backup_not_fresh" tmp/stale-select.log
+          test ! -f tmp/stale.env
+
+      - name: Reject fresh pre-only standby
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/pre-only-backup/00_LIBRARY tmp/pre-only-backup/99_INBOX/PROCESS_LOG/STORAGE
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          payload = {
+              'schema_version': 1,
+              'complete': True,
+              'phase': 'pre',
+              'scope_policy': 'critical_state_v1',
+              'scope_count': 2,
+              'completed_at': datetime.now(timezone.utc).isoformat(),
+          }
+          path = Path('tmp/pre-only-backup/99_INBOX/PROCESS_LOG/STORAGE/replication-state.json')
+          path.write_text(json.dumps(payload) + '\n', encoding='utf-8')
+          PY
+          set +e
+          python3 src/storage_failover.py \
+            --primary "primary:$(pwd)/tmp/missing-primary" \
+            --backup "backup:$(pwd)/tmp/pre-only-backup" \
+            --backup-configured \
+            --max-backup-age-hours 24 \
+            --env-out tmp/pre-only.env \
+            > tmp/pre-only-select.log 2>&1
+          selector_rc=$?
+          python3 src/standby_readiness.py \
+            --remote "backup:$(pwd)/tmp/pre-only-backup" \
+            --max-backup-age-hours 24 \
+            --require-unlocked \
+            > tmp/pre-only-readiness.log 2>&1
+          readiness_rc=$?
+          set -e
+          test "$selector_rc" -eq 2
+          test "$readiness_rc" -eq 2
+          grep -q "storage_select_error code=backup_not_fresh" tmp/pre-only-select.log
+          grep -q "standby_readiness_error code=full_post_not_fresh" tmp/pre-only-readiness.log
+          test ! -f tmp/pre-only.env
+          test ! -f tmp/pre-only-backup/99_INBOX/PROCESS_LOG/STORAGE/failover-active.json
+
+      - name: Validate sanitized logs
+        run: |
+          cat tmp/replica.log tmp/readiness.log tmp/primary-select.log tmp/fallback-select.log tmp/locked-select.log tmp/stale-select.log tmp/pre-only-select.log tmp/pre-only-readiness.log > tmp/all.log
+          for forbidden in \
+            PRIVATE_LIBRARY_CANARY \
+            PRIVATE_DROP_CANARY \
+            PRIVATE_QUEUE_CANARY \
+            PRIVATE_ERROR_CANARY \
+            PRIVATE_PROCESSED_CANARY \
+            private-upload.mp4 \
+            private-pending.mp4 \
+            private-error.txt \
+            private-processed.mp4
+          do
+            ! grep -q "$forbidden" tmp/all.log
+          done
+          echo "storage_failover_privacy_ok"
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp failover-active.json replication-state.json
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

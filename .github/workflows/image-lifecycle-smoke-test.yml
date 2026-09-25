@@ -1,0 +1,235 @@
+name: Image lifecycle smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/image_ingest.py"
+      - "src/image_bridge.py"
+      - "src/package_contracts.py"
+      - "src/reconcile.py"
+      - "src/reconcile_queues.py"
+      - "src/retention_cleanup.py"
+      - "src/process_record.py"
+      - ".github/workflows/image-lifecycle-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-image-lifecycle-test
+  cancel-in-progress: false
+
+jobs:
+  image-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create image reconciliation states
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, 'src')
+          from package_contracts import required_package_files
+          from process_record import build_process_record
+
+          root = Path('tmp/reconcile')
+          records = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          retry = root / '99_INBOX/PROCESS_LOG/RETRY'
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+          inbox = '99_INBOX/TO_REVIEW/IMAGES'
+          records.mkdir(parents=True, exist_ok=True)
+          retry.mkdir(parents=True, exist_ok=True)
+
+          cases = [
+              ('11111111111111111111', 'PRIVATE_IMAGE_COMPLETE.png', True),
+              ('22222222222222222222', 'PRIVATE_IMAGE_INCOMPLETE.png', False),
+          ]
+          for pid, name, complete in cases:
+              source = root / inbox / name
+              source.parent.mkdir(parents=True, exist_ok=True)
+              source.write_bytes(b'private image source')
+
+              package = ready / pid
+              package.mkdir(parents=True, exist_ok=True)
+              required = required_package_files(inbox)
+              assert required and 'preview.jpg' in required
+              for filename in required:
+                  if complete or filename != 'preview.jpg':
+                      (package / filename).write_bytes(b'{}')
+
+              record = build_process_record(
+                  provider='rclone_test',
+                  source_id=f'id-{pid}',
+                  source_name=name,
+                  source_folder=inbox,
+                  package_id=pid,
+                  pipeline_version='0.1.0',
+                  compactor_version='0.1.0',
+                  status='error',
+                  item={'MimeType': 'image/png'},
+                  destination_folder=inbox,
+                  error_code='source_move_failed',
+                  retryable=True,
+                  retention_days=30,
+              )
+              (package / 'process-record.json').write_text(json.dumps(record))
+              (records / f'{pid}.json').write_text(json.dumps(record))
+          PY
+
+      - name: Reconcile image states
+        run: |
+          python3 src/reconcile_queues.py \
+            --remote "fake:$(pwd)/tmp/reconcile" \
+            --workspace tmp/reconcile-work \
+            --max-retries 3 \
+            > tmp/reconcile.log 2>&1
+          grep -q "reconcile_queues_ok" tmp/reconcile.log
+          grep -q "finalized=1" tmp/reconcile.log
+          grep -q "requeued=1" tmp/reconcile.log
+
+      - name: Validate image reconciliation package guard
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('tmp/reconcile/99_INBOX')
+          assert (root / 'PROCESSED/IMAGES/PRIVATE_IMAGE_COMPLETE.png').is_file()
+          assert (root / 'TO_REVIEW/IMAGES/PRIVATE_IMAGE_INCOMPLETE.png').is_file()
+          assert not (root / 'PROCESSED/IMAGES/PRIVATE_IMAGE_INCOMPLETE.png').exists()
+
+          records = root / 'PROCESS_LOG/RECORDS'
+          complete = json.loads((records / '11111111111111111111.json').read_text())
+          incomplete = json.loads((records / '22222222222222222222.json').read_text())
+          assert complete['processing']['status'] == 'processed'
+          assert complete['routing']['destination_folder'] == '99_INBOX/PROCESSED/IMAGES'
+          assert incomplete['processing']['status'] == 'retry_queued'
+          assert incomplete['routing']['destination_folder'] == '99_INBOX/TO_REVIEW/IMAGES'
+
+          log = Path('tmp/reconcile.log').read_text()
+          assert 'PRIVATE_IMAGE_COMPLETE.png' not in log
+          assert 'PRIVATE_IMAGE_INCOMPLETE.png' not in log
+          print('image_reconcile_guard_ok log_privacy_ok')
+          PY
+
+      - name: Create image retention states
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          sys.path.insert(0, 'src')
+          from package_contracts import required_package_files
+
+          root = Path('tmp/retention')
+          records = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+          processed = root / '99_INBOX/PROCESSED/IMAGES'
+          for path in (records, ready, processed):
+              path.mkdir(parents=True, exist_ok=True)
+
+          now = datetime.now(timezone.utc)
+          inbox = '99_INBOX/TO_REVIEW/IMAGES'
+          for pid, name, complete in (
+              ('33333333333333333333', 'PRIVATE_RETENTION_COMPLETE.jpg', True),
+              ('44444444444444444444', 'PRIVATE_RETENTION_INCOMPLETE.jpg', False),
+          ):
+              record = {
+                  'schema_version': 1,
+                  'record_version': '0.1.0',
+                  'source': {
+                      'provider': 'rclone_test',
+                      'file_id': f'id-{pid}',
+                      'name': name,
+                      'media_type': 'image/jpeg',
+                      'source_folder': inbox,
+                      'received_at': (now - timedelta(days=41)).isoformat(),
+                  },
+                  'package_id': pid,
+                  'processing': {
+                      'status': 'processed',
+                      'error_code': None,
+                      'retryable': False,
+                      'processed_at': (now - timedelta(days=40)).isoformat(),
+                      'pipeline_version': '0.1.0',
+                      'compactor_version': '0.1.0',
+                  },
+                  'routing': {
+                      'destination_folder': '99_INBOX/PROCESSED/IMAGES',
+                      'keep_original': False,
+                      'source_recoverable': False,
+                      'retention_days': 30,
+                  },
+              }
+              (records / f'{pid}.json').write_text(json.dumps(record))
+              package = ready / pid
+              package.mkdir(parents=True, exist_ok=True)
+              required = required_package_files(inbox)
+              assert required
+              for filename in required:
+                  if complete or filename != 'preview.jpg':
+                      if filename == 'process-record.json':
+                          (package / filename).write_text(json.dumps(record))
+                      else:
+                          (package / filename).write_bytes(b'{}')
+              (processed / name).write_bytes(b'private processed image')
+          PY
+
+      - name: Dry-run image retention
+        run: |
+          python3 src/retention_cleanup.py \
+            --remote "fake:$(pwd)/tmp/retention" \
+            --workspace tmp/retention-dry \
+            > tmp/retention-dry.log 2>&1
+          grep -q "retention_ok mode=dry_run" tmp/retention-dry.log
+          grep -q "eligible=1" tmp/retention-dry.log
+          grep -q "guarded=1" tmp/retention-dry.log
+
+      - name: Apply and validate image retention guard
+        run: |
+          python3 src/retention_cleanup.py \
+            --remote "fake:$(pwd)/tmp/retention" \
+            --workspace tmp/retention-apply \
+            --apply \
+            > tmp/retention-apply.log 2>&1
+          grep -q "quarantined=1" tmp/retention-apply.log
+          grep -q "guarded=1" tmp/retention-apply.log
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('tmp/retention/99_INBOX')
+          assert (root / 'RETENTION_TRASH/PRIVATE_RETENTION_COMPLETE.jpg').is_file()
+          assert (root / 'PROCESSED/IMAGES/PRIVATE_RETENTION_INCOMPLETE.jpg').is_file()
+          assert not (root / 'RETENTION_TRASH/PRIVATE_RETENTION_INCOMPLETE.jpg').exists()
+
+          logs = Path('tmp/retention-dry.log').read_text() + Path('tmp/retention-apply.log').read_text()
+          assert 'PRIVATE_RETENTION_COMPLETE.jpg' not in logs
+          assert 'PRIVATE_RETENTION_INCOMPLETE.jpg' not in logs
+          print('image_retention_guard_ok log_privacy_ok')
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

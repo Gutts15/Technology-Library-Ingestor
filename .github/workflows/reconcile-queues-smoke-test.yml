@@ -1,0 +1,193 @@
+name: Queue-aware reconciliation smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/reconcile_queues.py"
+      - "src/reconcile.py"
+      - "src/process_record.py"
+      - "src/package_contracts.py"
+      - ".github/workflows/reconcile-queues-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-reconcile-queues-test
+  cancel-in-progress: false
+
+jobs:
+  queue-reconciliation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create mixed retry states
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'src')
+          from package_contracts import required_package_files
+          from process_record import build_process_record
+
+          root = Path('tmp/fake')
+          records = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          records.mkdir(parents=True, exist_ok=True)
+          (root / '99_INBOX/PROCESS_LOG/RETRY').mkdir(parents=True, exist_ok=True)
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+
+          finalize_cases = [
+              ('11111111111111111111', 'PRIVATE_VIDEO.mp4', '99_INBOX/TO_REVIEW/VIDEOS', 'video/mp4'),
+              ('22222222222222222222', 'PRIVATE_TEXT.md', '99_INBOX/TO_REVIEW/TEXT', 'text/markdown'),
+              ('44444444444444444444', 'PRIVATE_SHEET.xlsx', '99_INBOX/TO_REVIEW/SPREADSHEETS', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+          ]
+          for pid, name, inbox, mime in finalize_cases:
+              source = root / inbox / name
+              source.parent.mkdir(parents=True, exist_ok=True)
+              source.write_text('source')
+              package = ready / pid
+              package.mkdir(parents=True, exist_ok=True)
+              required = required_package_files(inbox)
+              assert required
+              for filename in required:
+                  (package / filename).write_text('{}')
+              record = build_process_record(
+                  provider='rclone_test', source_id=f'id-{pid}', source_name=name,
+                  source_folder=inbox, package_id=pid, pipeline_version='test',
+                  compactor_version='test', status='error', item={'MimeType': mime},
+                  destination_folder=inbox, error_code='source_move_failed',
+                  retryable=True, retention_days=30,
+              )
+              (package / 'process-record.json').write_text(json.dumps(record))
+              (records / f'{pid}.json').write_text(json.dumps(record))
+
+          # A failed document should be moved back from ERROR to its own review queue.
+          pid = '33333333333333333333'
+          name = 'PRIVATE_DOC.pdf'
+          inbox = '99_INBOX/TO_REVIEW/DOCUMENTS'
+          error = '99_INBOX/ERROR/DOCUMENTS'
+          source = root / error / name
+          source.parent.mkdir(parents=True, exist_ok=True)
+          source.write_text('failed doc')
+          record = build_process_record(
+              provider='rclone_test', source_id='id-doc', source_name=name,
+              source_folder=inbox, package_id=pid, pipeline_version='test',
+              compactor_version='test', status='error', item={'MimeType': 'application/pdf'},
+              destination_folder=error, error_code='content_processing_failed',
+              retryable=True, retention_days=30,
+          )
+          (records / f'{pid}.json').write_text(json.dumps(record))
+
+          # A spreadsheet with source_move_failed but no spreadsheet-index.json
+          # must NOT be finalized to PROCESSED. It must re-enter retry instead.
+          pid = '55555555555555555555'
+          name = 'PRIVATE_INCOMPLETE_SHEET.xlsx'
+          inbox = '99_INBOX/TO_REVIEW/SPREADSHEETS'
+          source = root / inbox / name
+          source.parent.mkdir(parents=True, exist_ok=True)
+          source.write_text('incomplete source')
+          package = ready / pid
+          package.mkdir(parents=True, exist_ok=True)
+          for filename in ('ingest.json', 'checkpoint.json', 'evidence-summary.json', 'process-record.json'):
+              (package / filename).write_text('{}')
+          record = build_process_record(
+              provider='rclone_test', source_id='id-incomplete-sheet', source_name=name,
+              source_folder=inbox, package_id=pid, pipeline_version='test',
+              compactor_version='test', status='error',
+              item={'MimeType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
+              destination_folder=inbox, error_code='source_move_failed',
+              retryable=True, retention_days=30,
+          )
+          (package / 'process-record.json').write_text(json.dumps(record))
+          (records / f'{pid}.json').write_text(json.dumps(record))
+          PY
+
+      - name: Reconcile all known queues
+        run: |
+          python3 src/reconcile_queues.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            --workspace tmp/workspace \
+            --max-retries 3 \
+            > tmp/reconcile.log 2>&1
+          grep -q "reconcile_queues_ok" tmp/reconcile.log
+          grep -q "finalized=3" tmp/reconcile.log
+          grep -q "requeued=2" tmp/reconcile.log
+
+      - name: Validate strict queue and package isolation
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('tmp/fake/99_INBOX')
+          assert (root / 'PROCESSED/VIDEOS/PRIVATE_VIDEO.mp4').is_file()
+          assert (root / 'PROCESSED/TEXT/PRIVATE_TEXT.md').is_file()
+          assert (root / 'PROCESSED/SPREADSHEETS/PRIVATE_SHEET.xlsx').is_file()
+          assert (root / 'TO_REVIEW/DOCUMENTS/PRIVATE_DOC.pdf').is_file()
+          assert (root / 'TO_REVIEW/SPREADSHEETS/PRIVATE_INCOMPLETE_SHEET.xlsx').is_file()
+
+          assert not (root / 'PROCESSED/TEXT/PRIVATE_VIDEO.mp4').exists()
+          assert not (root / 'PROCESSED/VIDEOS/PRIVATE_TEXT.md').exists()
+          assert not (root / 'PROCESSED/DOCUMENTS/PRIVATE_SHEET.xlsx').exists()
+          assert not (root / 'PROCESSED/SPREADSHEETS/PRIVATE_INCOMPLETE_SHEET.xlsx').exists()
+          assert not (root / 'TO_REVIEW/VIDEOS/PRIVATE_DOC.pdf').exists()
+
+          records = root / 'PROCESS_LOG/RECORDS'
+          video = json.loads((records / '11111111111111111111.json').read_text())
+          text = json.loads((records / '22222222222222222222.json').read_text())
+          doc = json.loads((records / '33333333333333333333.json').read_text())
+          sheet = json.loads((records / '44444444444444444444.json').read_text())
+          incomplete_sheet = json.loads((records / '55555555555555555555.json').read_text())
+
+          assert video['processing']['status'] == 'processed'
+          assert video['routing']['destination_folder'] == '99_INBOX/PROCESSED/VIDEOS'
+          assert text['processing']['status'] == 'processed'
+          assert text['routing']['destination_folder'] == '99_INBOX/PROCESSED/TEXT'
+          assert sheet['processing']['status'] == 'processed'
+          assert sheet['routing']['destination_folder'] == '99_INBOX/PROCESSED/SPREADSHEETS'
+          assert doc['processing']['status'] == 'retry_queued'
+          assert doc['routing']['destination_folder'] == '99_INBOX/TO_REVIEW/DOCUMENTS'
+          assert incomplete_sheet['processing']['status'] == 'retry_queued'
+          assert incomplete_sheet['routing']['destination_folder'] == '99_INBOX/TO_REVIEW/SPREADSHEETS'
+
+          log = Path('tmp/reconcile.log').read_text()
+          for private in (
+              'PRIVATE_VIDEO.mp4', 'PRIVATE_TEXT.md', 'PRIVATE_DOC.pdf',
+              'PRIVATE_SHEET.xlsx', 'PRIVATE_INCOMPLETE_SHEET.xlsx',
+          ):
+              assert private not in log
+          print('queue_isolation_ok package_contract_guard_ok mixed_reconciliation_ok log_privacy_ok')
+          PY
+
+      - name: Re-run without duplicating work
+        run: |
+          rm -rf tmp/workspace-second
+          python3 src/reconcile_queues.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            --workspace tmp/workspace-second \
+            --max-retries 3 \
+            > tmp/reconcile-second.log 2>&1
+          grep -q "pending=2" tmp/reconcile-second.log
+          grep -q "finalized=0" tmp/reconcile-second.log
+          grep -q "requeued=0" tmp/reconcile-second.log
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

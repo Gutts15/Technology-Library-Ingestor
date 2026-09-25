@@ -1,0 +1,290 @@
+name: Run metrics smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/run_metrics.py"
+      - "src/run_report.py"
+      - ".github/workflows/run-metrics-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-run-metrics-test
+  cancel-in-progress: false
+
+jobs:
+  run-metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create sanitized run history with hostile extra fields
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          runs = Path('tmp/runs')
+          remote_runs = Path('tmp/fake-storage/99_INBOX/PROCESS_LOG/RUNS')
+          runs.mkdir(parents=True, exist_ok=True)
+          remote_runs.mkdir(parents=True, exist_ok=True)
+
+          pipelines = ('links', 'images', 'audio', 'videos', 'content', 'spreadsheets')
+          deps = ('storage_rclone', 'ffmpeg', 'tesseract', 'poppler', 'transcription_python', 'spreadsheet_python')
+
+          def pipe():
+              return {key: {'planned': 0, 'summary_present': False, 'selected': 0, 'processed': 0, 'finalized': 0, 'rejected': 0, 'errors': 0, 'warnings': 0} for key in pipelines}
+
+          def report(start, finish, status, heavy, raw, supported, preserved, planned_files, totals, dependency_true, pipeline_changes):
+              p = pipe()
+              for key, values in pipeline_changes.items():
+                  p[key].update(values)
+              d = {key: key in dependency_true for key in deps}
+              return {
+                  'schema_version': 1,
+                  'report_version': '0.1.0',
+                  'run': {
+                      'id': '999999999999',
+                      'attempt': 1,
+                      'status': status,
+                      'provider': 'fake',
+                      'started_at': start,
+                      'finished_at': finish,
+                      'duration_seconds': 999999,
+                      'PRIVATE_FILENAME': 'PRIVATE_CANARY.xlsx',
+                  },
+                  'plan': {
+                      'available': True,
+                      'planner_version': '0.1.1',
+                      'heavy_choice': heavy,
+                      'batches': {},
+                      'queues': {},
+                      'totals': {
+                          'raw_pending_files': raw,
+                          'supported_pending_files': supported,
+                          'preserved_unsupported_files': preserved,
+                          'pending_bytes': raw * 1000,
+                          'planned_files': planned_files,
+                      },
+                  },
+                  'dependencies': d,
+                  'pipelines': p,
+                  'totals': totals,
+                  'arbitrary_private_payload': {
+                      'package_id': 'PRIVATE_PACKAGE_CANARY',
+                      'url': 'https://example.invalid/?token=PRIVATE_QUERY_CANARY',
+                  },
+              }
+
+          reports = [
+              report(
+                  '2026-09-08T10:00:00+00:00', '2026-09-08T10:01:00+00:00',
+                  'success', 'audio', 10, 8, 2, 5,
+                  {'planned': 5, 'selected': 5, 'processed': 4, 'finalized': 0, 'rejected': 1, 'errors': 0, 'warnings': 0, 'summaries_present': 2},
+                  {'storage_rclone', 'ffmpeg', 'transcription_python'},
+                  {
+                      'links': {'planned': 4, 'selected': 4, 'processed': 3, 'rejected': 1},
+                      'audio': {'planned': 1, 'selected': 1, 'processed': 1},
+                  },
+              ),
+              report(
+                  '2026-09-08T11:00:00+00:00', '2026-09-08T11:02:00+00:00',
+                  'success', 'video', 7, 6, 1, 3,
+                  {'planned': 3, 'selected': 3, 'processed': 2, 'finalized': 1, 'rejected': 0, 'errors': 0, 'warnings': 0, 'summaries_present': 1},
+                  {'storage_rclone', 'ffmpeg', 'tesseract', 'transcription_python'},
+                  {'videos': {'planned': 3, 'selected': 3, 'processed': 2, 'finalized': 1}},
+              ),
+              report(
+                  '2026-09-08T12:00:00+00:00', '2026-09-08T12:03:00+00:00',
+                  'failure', 'none', 6, 2, 4, 2,
+                  {'planned': 2, 'selected': 2, 'processed': 1, 'finalized': 0, 'rejected': 0, 'errors': 1, 'warnings': 1, 'summaries_present': 1},
+                  {'storage_rclone', 'poppler'},
+                  {'content': {'planned': 2, 'selected': 2, 'processed': 1, 'errors': 1, 'warnings': 1}},
+              ),
+              report(
+                  '2026-09-08T13:00:00+00:00', '2026-09-08T13:00:30+00:00',
+                  'success', 'none', 0, 0, 0, 0,
+                  {'planned': 0, 'selected': 0, 'processed': 0, 'finalized': 0, 'rejected': 0, 'errors': 0, 'warnings': 0, 'summaries_present': 0},
+                  {'storage_rclone'},
+                  {},
+              ),
+          ]
+
+          for index, payload in enumerate(reports, start=1):
+              name = f'run-{index:03d}-attempt-1.json'
+              text = json.dumps(payload, ensure_ascii=False, indent=2) + '\n'
+              (runs / name).write_text(text, encoding='utf-8')
+              (remote_runs / name).write_text(text, encoding='utf-8')
+
+          invalid = {
+              'schema_version': 999,
+              'run': {
+                  'started_at': '2026-09-08T14:00:00+00:00',
+                  'finished_at': '2026-09-08T14:01:00+00:00',
+              },
+              'PRIVATE_SECRET': 'PRIVATE_INVALID_CANARY',
+          }
+          invalid_text = json.dumps(invalid, indent=2) + '\n'
+          (runs / 'run-005-attempt-1.json').write_text(invalid_text, encoding='utf-8')
+          (remote_runs / 'run-005-attempt-1.json').write_text(invalid_text, encoding='utf-8')
+
+          # This JSON is deliberately outside the accepted run-* contract.
+          (runs / 'not-a-run.json').write_text('{"PRIVATE":"PRIVATE_IGNORED_CANARY"}\n', encoding='utf-8')
+          (remote_runs / 'not-a-run.json').write_text('{"PRIVATE":"PRIVATE_IGNORED_CANARY"}\n', encoding='utf-8')
+
+          # Deterministic modification order for bounded remote/local selection.
+          stamp = datetime(2026, 9, 8, 15, 0, tzinfo=timezone.utc).timestamp()
+          for offset, path in enumerate(sorted(runs.glob('run-*.json'))):
+              os.utime(path, (stamp + offset, stamp + offset))
+          for offset, path in enumerate(sorted(remote_runs.glob('run-*.json'))):
+              os.utime(path, (stamp + offset, stamp + offset))
+          PY
+
+      - name: Aggregate local run history
+        run: |
+          python3 src/run_metrics.py \
+            --source-dir tmp/runs \
+            --out tmp/local-metrics.json \
+            --max-runs 5 \
+            > tmp/local-metrics.log 2>&1
+          grep -q "run_metrics_ok" tmp/local-metrics.log
+
+      - name: Validate statistics whitelist and privacy
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          metrics = json.loads(Path('tmp/local-metrics.json').read_text())
+          assert metrics['schema_version'] == 1
+          assert metrics['metrics_version'] == '0.1.0'
+          assert metrics['window']['reports_seen'] == 5
+          assert metrics['window']['reports_used'] == 4
+          assert metrics['window']['invalid_reports'] == 1
+          assert metrics['window']['max_runs'] == 5
+
+          runs = metrics['runs']
+          assert runs['total'] == 4
+          assert runs['status'] == {'success': 3, 'failure': 1, 'cancelled': 0, 'unknown': 0}
+          assert runs['work_runs'] == 3
+          assert runs['empty_plans'] == 1
+          assert runs['runs_with_errors'] == 1
+          assert runs['work_run_rate'] == 0.75
+          assert runs['error_run_rate'] == 0.25
+          assert runs['duration_seconds'] == {
+              'sum': 390,
+              'mean': 97.5,
+              'median': 90.0,
+              'p90': 180,
+              'max': 180,
+          }
+          assert runs['observed_runtime_minutes'] == 6.5
+
+          work = metrics['workload']
+          assert work['planned'] == 10
+          assert work['selected'] == 10
+          assert work['processed'] == 7
+          assert work['finalized'] == 1
+          assert work['rejected'] == 1
+          assert work['errors'] == 1
+          assert work['warnings'] == 1
+          assert work['handled'] == 9
+          assert work['selection_ratio'] == 1.0
+          assert work['handled_ratio'] == 0.9
+          assert work['handled_per_observed_minute'] == 1.3846
+
+          assert metrics['heavy_choice'] == {'audio': 1, 'video': 1, 'none': 2, 'unknown': 0}
+          assert metrics['dependencies_runs'] == {
+              'storage_rclone': 4,
+              'ffmpeg': 2,
+              'tesseract': 1,
+              'poppler': 1,
+              'transcription_python': 2,
+              'spreadsheet_python': 0,
+          }
+          assert metrics['backlog_at_plan']['supported_pending_files']['max'] == 8
+          assert metrics['backlog_at_plan']['preserved_unsupported_files']['max'] == 4
+          assert metrics['backlog_at_plan']['raw_pending_files']['latest'] == 0
+          assert metrics['pipelines']['audio']['processed'] == 1
+          assert metrics['pipelines']['videos']['finalized'] == 1
+          assert metrics['pipelines']['content']['errors'] == 1
+
+          combined = Path('tmp/local-metrics.json').read_text() + Path('tmp/local-metrics.log').read_text()
+          for forbidden in ('PRIVATE_CANARY', 'PRIVATE_PACKAGE_CANARY', 'PRIVATE_QUERY_CANARY', '999999999999'):
+              assert forbidden not in combined
+          assert len(Path('tmp/local-metrics.json').read_bytes()) <= 24 * 1024
+          print('run_metrics_statistics_ok privacy_whitelist_ok duration_rederived_ok')
+          PY
+
+      - name: Aggregate and persist through fake rclone storage
+        run: |
+          python3 src/run_metrics.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --out tmp/remote-metrics.json \
+            --max-runs 5 \
+            > tmp/remote-metrics.log 2>&1
+          grep -q "uploaded=1" tmp/remote-metrics.log
+
+      - name: Validate remote metrics contract
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          local = json.loads(Path('tmp/local-metrics.json').read_text())
+          remote = json.loads(Path('tmp/remote-metrics.json').read_text())
+          persisted = Path('tmp/fake-storage/99_INBOX/PROCESS_LOG/METRICS/latest.json')
+          assert persisted.is_file()
+          stored = json.loads(persisted.read_text())
+
+          for key in ('runs', 'workload', 'backlog_at_plan', 'heavy_choice', 'dependencies_runs', 'pipelines'):
+              assert remote[key] == local[key]
+              assert stored[key] == local[key]
+
+          combined = persisted.read_text() + Path('tmp/remote-metrics.log').read_text()
+          assert 'PRIVATE_' not in combined
+          assert '999999999999' not in combined
+          print('run_metrics_remote_ok persisted_latest_ok')
+          PY
+
+      - name: Validate empty history is safe
+        run: |
+          mkdir -p tmp/empty-runs
+          python3 src/run_metrics.py \
+            --source-dir tmp/empty-runs \
+            --out tmp/empty-metrics.json \
+            --max-runs 5 \
+            > tmp/empty-metrics.log 2>&1
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('tmp/empty-metrics.json').read_text())
+          assert data['window']['reports_seen'] == 0
+          assert data['runs']['total'] == 0
+          assert data['workload']['handled'] == 0
+          assert data['runs']['duration_seconds']['median'] == 0.0
+          print('run_metrics_empty_ok')
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

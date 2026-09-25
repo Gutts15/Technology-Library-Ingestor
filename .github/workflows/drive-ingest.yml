@@ -1,0 +1,450 @@
+name: Private storage ingest
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-private-storage-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Enforce zero-additional-cost source guardrail
+        run: python3 src/cost_guardrail.py
+
+      - name: Initialize sanitized run timing
+        run: echo "TL_RUN_STARTED_EPOCH=$(date +%s)" >> "${GITHUB_ENV}"
+
+      - name: Install minimal storage tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Configure private storage
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+          TL_STORAGE_PROVIDER: ${{ secrets.TL_STORAGE_PROVIDER }}
+          TL_RCLONE_BACKUP_CONFIG: ${{ secrets.TL_RCLONE_BACKUP_CONFIG }}
+          TL_STORAGE_BACKUP_PROVIDER: ${{ secrets.TL_STORAGE_BACKUP_PROVIDER }}
+          TL_GOOGLE_CLIENT_ID: ${{ secrets.TL_GOOGLE_CLIENT_ID }}
+          TL_GOOGLE_CLIENT_SECRET: ${{ secrets.TL_GOOGLE_CLIENT_SECRET }}
+          TL_GOOGLE_TOKEN: ${{ secrets.TL_GOOGLE_TOKEN }}
+          TL_GOOGLE_ROOT_FOLDER_ID: ${{ secrets.TL_GOOGLE_ROOT_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+
+          CONFIG_FILE="${RUNNER_TEMP}/tl-rclone.conf"
+          ENV_FILE="${RUNNER_TEMP}/tl-storage.env"
+          umask 077
+          : > "${CONFIG_FILE}"
+          : > "${ENV_FILE}"
+
+          if [ -n "${TL_RCLONE_CONFIG:-}" ]; then
+            printf '%s' "${TL_RCLONE_CONFIG}" > "${CONFIG_FILE}"
+            PRIMARY_PROVIDER="${TL_STORAGE_PROVIDER:-rclone}"
+          else
+            cat > "${CONFIG_FILE}" <<EOF
+          [tl]
+          type = drive
+          client_id = ${TL_GOOGLE_CLIENT_ID}
+          client_secret = ${TL_GOOGLE_CLIENT_SECRET}
+          token = ${TL_GOOGLE_TOKEN}
+          scope = drive
+          root_folder_id = ${TL_GOOGLE_ROOT_FOLDER_ID}
+          EOF
+            PRIMARY_PROVIDER="google_drive"
+          fi
+
+          BACKUP_CONFIGURED=0
+          BACKUP_PROVIDER="${TL_STORAGE_BACKUP_PROVIDER:-onedrive}"
+          if [ -n "${TL_RCLONE_BACKUP_CONFIG:-}" ]; then
+            printf '\n%s\n' "${TL_RCLONE_BACKUP_CONFIG}" >> "${CONFIG_FILE}"
+            BACKUP_CONFIGURED=1
+          fi
+
+          {
+            echo "RCLONE_CONFIG=${CONFIG_FILE}"
+            echo "TL_PRIMARY_PROVIDER=${PRIMARY_PROVIDER}"
+            echo "TL_BACKUP_PROVIDER=${BACKUP_PROVIDER}"
+            echo "TL_BACKUP_CONFIGURED=${BACKUP_CONFIGURED}"
+          } >> "${ENV_FILE}"
+
+          echo "TL_STORAGE_ENV=${ENV_FILE}" >> "${GITHUB_ENV}"
+          echo "TL_BACKUP_CONFIGURED=${BACKUP_CONFIGURED}" >> "${GITHUB_ENV}"
+
+      - name: Reconcile recovered primary before failback
+        if: env.TL_BACKUP_CONFIGURED == '1'
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+
+          RECONCILE_LOG="${RUNNER_TEMP}/tl-storage-reconcile.log"
+          python3 src/storage_reconcile.py \
+            --primary "tl:" \
+            --backup "tl_backup:" \
+            --primary-provider "${TL_PRIMARY_PROVIDER}" \
+            --backup-provider "${TL_BACKUP_PROVIDER}" \
+            --auto \
+            > "${RECONCILE_LOG}" 2>&1
+
+          if grep -q '^storage_reconcile_ok ' "${RECONCILE_LOG}"; then
+            echo "storage_reconcile_auto_result=reconciled"
+            echo "TL_FAILBACK_RECONCILED=1" >> "${GITHUB_ENV}"
+          elif grep -q '^storage_reconcile_skip ' "${RECONCILE_LOG}"; then
+            echo "storage_reconcile_auto_result=skip"
+            echo "TL_FAILBACK_RECONCILED=0" >> "${GITHUB_ENV}"
+          else
+            echo "storage_reconcile_auto_result=unexpected"
+            exit 1
+          fi
+
+      - name: Select active private storage
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+
+          ACTIVE_ENV="${RUNNER_TEMP}/tl-active-storage.env"
+          args=(
+            --primary "tl:"
+            --backup "tl_backup:"
+            --primary-provider "${TL_PRIMARY_PROVIDER}"
+            --backup-provider "${TL_BACKUP_PROVIDER}"
+            --max-backup-age-hours 24
+            --env-out "${ACTIVE_ENV}"
+          )
+          if [ "${TL_BACKUP_CONFIGURED}" = "1" ]; then
+            args+=(--backup-configured)
+          fi
+
+          python3 src/storage_failover.py "${args[@]}"
+          cat "${ACTIVE_ENV}" >> "${TL_STORAGE_ENV}"
+          cat "${ACTIVE_ENV}" >> "${GITHUB_ENV}"
+
+      - name: Replicate fresh ingress to standby
+        if: env.TL_BACKUP_CONFIGURED == '1' && env.TL_STORAGE_MODE == 'primary'
+        continue-on-error: true
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/storage_replica.py \
+            --source "tl:" \
+            --destination "tl_backup:" \
+            --source-provider "${TL_PRIMARY_PROVIDER}" \
+            --destination-provider "${TL_BACKUP_PROVIDER}" \
+            --phase pre
+
+      - name: Reconcile retryable ingest state across queues
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/reconcile_queues.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --workspace "${RUNNER_TEMP}/tl-reconcile" \
+            --max-retries 3
+
+      - name: Route unified DROP_HERE inbox
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/media_router.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --source "99_INBOX/DROP_HERE"
+
+      - name: Plan bounded multi-pipeline workload
+        run: |
+          set -euo pipefail
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          PLAN_JSON="${RUNNER_TEMP}/tl-workload-plan.json"
+          PLAN_ENV="${RUNNER_TEMP}/tl-workload-plan.env"
+          python3 src/workload_plan.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --json-out "${PLAN_JSON}" \
+            --env-out "${PLAN_ENV}"
+          cat "${PLAN_ENV}" >> "${GITHUB_ENV}"
+
+      - name: Install planned system dependencies
+        if: env.TL_PLAN_IMAGE_BATCH != '0' || env.TL_PLAN_AUDIO_BATCH != '0' || env.TL_PLAN_VIDEO_BATCH != '0' || env.TL_PLAN_CONTENT_BATCH != '0'
+        run: |
+          set -euo pipefail
+          packages=()
+
+          if [ "${TL_PLAN_IMAGE_BATCH}" != "0" ] || [ "${TL_PLAN_AUDIO_BATCH}" != "0" ] || [ "${TL_PLAN_VIDEO_BATCH}" != "0" ]; then
+            packages+=(ffmpeg)
+          fi
+
+          if [ "${TL_PLAN_IMAGE_BATCH}" != "0" ] || [ "${TL_PLAN_VIDEO_BATCH}" != "0" ]; then
+            packages+=(tesseract-ocr tesseract-ocr-eng tesseract-ocr-por)
+          fi
+
+          if [ "${TL_PLAN_CONTENT_BATCH}" != "0" ]; then
+            packages+=(poppler-utils)
+          fi
+
+          if [ "${#packages[@]}" -gt 0 ]; then
+            sudo apt-get install -y "${packages[@]}"
+          fi
+
+      - name: Install planned transcription dependencies
+        if: env.TL_PLAN_AUDIO_BATCH != '0' || env.TL_PLAN_VIDEO_BATCH != '0'
+        run: |
+          python3 -m pip install --disable-pip-version-check -r requirements-transcription.txt
+
+      - name: Install planned spreadsheet dependencies
+        if: env.TL_PLAN_SPREADSHEET_BATCH != '0'
+        run: |
+          python3 -m pip install --disable-pip-version-check -r requirements-spreadsheet.txt
+
+      - name: Run offline link ingestion
+        if: env.TL_PLAN_LINK_BATCH != '0'
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/link_bridge.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --workspace "${RUNNER_TEMP}/tl-link-ingestor" \
+            --provider "${TL_EFFECTIVE_PROVIDER}" \
+            --batch-size "${TL_PLAN_LINK_BATCH}"
+
+      - name: Run static image ingestion
+        if: env.TL_PLAN_IMAGE_BATCH != '0'
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/image_bridge.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --workspace "${RUNNER_TEMP}/tl-image-ingestor" \
+            --provider "${TL_EFFECTIVE_PROVIDER}" \
+            --batch-size "${TL_PLAN_IMAGE_BATCH}" \
+            --ocr \
+            --ocr-languages eng+por
+
+      - name: Run planned audio ingestion
+        if: env.TL_PLAN_AUDIO_BATCH != '0'
+        env:
+          HF_HOME: ${{ runner.temp }}/tl-hf-cache
+          XDG_CACHE_HOME: ${{ runner.temp }}/tl-cache
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/audio_bridge.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --workspace "${RUNNER_TEMP}/tl-audio-ingestor" \
+            --provider "${TL_EFFECTIVE_PROVIDER}" \
+            --batch-size "${TL_PLAN_AUDIO_BATCH}" \
+            --transcribe \
+            --whisper-model base
+
+      - name: Run planned video ingestion
+        if: env.TL_PLAN_VIDEO_BATCH != '0'
+        env:
+          HF_HOME: ${{ runner.temp }}/tl-hf-cache
+          XDG_CACHE_HOME: ${{ runner.temp }}/tl-cache
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/rclone_bridge.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --workspace "${RUNNER_TEMP}/tl-video-ingestor" \
+            --provider "${TL_EFFECTIVE_PROVIDER}" \
+            --batch-size "${TL_PLAN_VIDEO_BATCH}" \
+            --max-keyframes 12 \
+            --ocr \
+            --ocr-languages eng+por \
+            --transcribe \
+            --whisper-model base
+
+      - name: Run text and supported document ingestion
+        if: env.TL_PLAN_CONTENT_BATCH != '0'
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/text_document_bridge.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --workspace "${RUNNER_TEMP}/tl-content-ingestor" \
+            --provider "${TL_EFFECTIVE_PROVIDER}" \
+            --batch-size "${TL_PLAN_CONTENT_BATCH}"
+
+      - name: Run selective spreadsheet ingestion
+        if: env.TL_PLAN_SPREADSHEET_BATCH != '0'
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/spreadsheet_bridge.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --workspace "${RUNNER_TEMP}/tl-spreadsheet-ingestor" \
+            --provider "${TL_EFFECTIVE_PROVIDER}" \
+            --batch-size "${TL_PLAN_SPREADSHEET_BATCH}" \
+            --rows-per-chunk 1000
+
+      - name: Refresh private candidate queue index
+        if: always() && env.TL_STORAGE_ENV != ''
+        continue-on-error: true
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/candidate_queue.py \
+            --remote "${TL_ACTIVE_REMOTE}"
+
+      - name: Build deterministic candidate validation proposals
+        if: always() && env.TL_STORAGE_ENV != ''
+        continue-on-error: true
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/candidate_validator.py \
+            --remote "${TL_ACTIVE_REMOTE}"
+
+      - name: Refresh compact READY index
+        if: always() && env.TL_STORAGE_ENV != ''
+        continue-on-error: true
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/ready_index.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --out "${RUNNER_TEMP}/tl-ready-index.json" \
+            --max-packages 100
+
+      - name: Refresh curation handoff state
+        if: always() && env.TL_STORAGE_ENV != ''
+        continue-on-error: true
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/curation_handoff.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --max-handoff 50
+
+      - name: Stage pending READY evidence for unified validation
+        if: always() && env.TL_STORAGE_ENV != ''
+        continue-on-error: true
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/ready_evidence_bridge.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --max-items 50
+
+      - name: Persist sanitized run telemetry
+        if: always() && env.TL_STORAGE_ENV != '' && env.TL_RUN_STARTED_EPOCH != ''
+        continue-on-error: true
+        env:
+          TL_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          FINISHED_EPOCH="$(date +%s)"
+          python3 src/run_report.py \
+            --plan "${RUNNER_TEMP}/tl-workload-plan.json" \
+            --workspace-root "${RUNNER_TEMP}" \
+            --out "${RUNNER_TEMP}/tl-run-report.json" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --job-status "${TL_JOB_STATUS}" \
+            --provider "${TL_EFFECTIVE_PROVIDER}" \
+            --started-epoch "${TL_RUN_STARTED_EPOCH}" \
+            --finished-epoch "${FINISHED_EPOCH}" \
+            --remote "${TL_ACTIVE_REMOTE}"
+
+      - name: Refresh sanitized aggregate run metrics
+        if: always() && env.TL_STORAGE_ENV != ''
+        continue-on-error: true
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/run_metrics.py \
+            --remote "${TL_ACTIVE_REMOTE}" \
+            --out "${RUNNER_TEMP}/tl-run-metrics.json" \
+            --max-runs 50
+
+      - name: Assess zero-touch cadence readiness
+        if: always() && env.TL_STORAGE_ENV != ''
+        continue-on-error: true
+        run: |
+          if [ ! -f "${RUNNER_TEMP}/tl-run-metrics.json" ]; then
+            echo "cadence_assess_skip code=metrics_missing"
+            exit 0
+          fi
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/cadence_assess.py \
+            --metrics "${RUNNER_TEMP}/tl-run-metrics.json" \
+            --out "${RUNNER_TEMP}/tl-cadence-readiness.json" \
+            --remote "${TL_ACTIVE_REMOTE}"
+
+      - name: Replicate final critical state to standby
+        if: always() && env.TL_BACKUP_CONFIGURED == '1' && env.TL_STORAGE_MODE == 'primary'
+        continue-on-error: true
+        run: |
+          set -a
+          . "${TL_STORAGE_ENV}"
+          set +a
+          python3 src/storage_replica.py \
+            --source "tl:" \
+            --destination "tl_backup:" \
+            --source-provider "${TL_PRIMARY_PROVIDER}" \
+            --destination-provider "${TL_BACKUP_PROVIDER}" \
+            --phase post
+
+      - name: Remove temporary processing data
+        if: always()
+        run: |
+          rm -rf \
+            "${RUNNER_TEMP}/tl-reconcile" \
+            "${RUNNER_TEMP}/tl-link-ingestor" \
+            "${RUNNER_TEMP}/tl-image-ingestor" \
+            "${RUNNER_TEMP}/tl-audio-ingestor" \
+            "${RUNNER_TEMP}/tl-video-ingestor" \
+            "${RUNNER_TEMP}/tl-content-ingestor" \
+            "${RUNNER_TEMP}/tl-spreadsheet-ingestor" \
+            "${RUNNER_TEMP}/tl-hf-cache" \
+            "${RUNNER_TEMP}/tl-cache" \
+            "${RUNNER_TEMP}/tl-workload-plan.json" \
+            "${RUNNER_TEMP}/tl-workload-plan.env" \
+            "${RUNNER_TEMP}/tl-ready-index.json" \
+            "${RUNNER_TEMP}/tl-run-report.json" \
+            "${RUNNER_TEMP}/tl-run-metrics.json" \
+            "${RUNNER_TEMP}/tl-cadence-readiness.json" \
+            "${RUNNER_TEMP}/tl-storage-reconcile.log" \
+            "${RUNNER_TEMP}/tl-active-storage.env" \
+            "${RUNNER_TEMP}/tl-rclone.conf" \
+            "${RUNNER_TEMP}/tl-storage.env"
+
+      - name: Verify repository workspace is clean
+        if: always()
+        run: |
+          test -z "$(git status --porcelain)"

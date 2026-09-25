@@ -1,0 +1,108 @@
+name: Legacy READY evidence rebuild smoke test
+
+on:
+  push:
+    paths:
+      - "src/legacy_ready_evidence_rebuild.py"
+      - ".github/workflows/legacy-ready-evidence-rebuild-smoke-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build synthetic legacy READY package
+        run: |
+          set -euo pipefail
+          ROOT="${RUNNER_TEMP}/ready"
+          PKG="${ROOT}/0123456789abcdefabcd"
+          mkdir -p "${PKG}"
+          cat > "${PKG}/ingest.json" <<'JSON'
+          {
+            "schema_version": 1,
+            "source": {
+              "provider": "synthetic",
+              "file_id": "synthetic-video",
+              "name": "synthetic.mp4",
+              "media_type": "video/mp4"
+            },
+            "media": {
+              "duration_seconds": 12.0,
+              "has_audio": false
+            },
+            "processing": {
+              "status": "processed",
+              "pipeline_version": "0.5.0",
+              "processed_at": "2026-09-09T00:00:00+00:00",
+              "transcript_stats": {}
+            },
+            "artifacts": {
+              "timeline": "timeline.md",
+              "ocr": null,
+              "transcript": null,
+              "contact_sheet": null
+            }
+          }
+          JSON
+          cat > "${PKG}/checkpoint.json" <<'JSON'
+          {"schema_version":1,"status":"processed"}
+          JSON
+          cat > "${PKG}/timeline.md" <<'EOF'
+          # Video Evidence Timeline
+
+          - Duration: 00:00:12.000
+          - Keyframes: 0
+          - Speech segments: 0
+          EOF
+          printf 'raw-media-sentinel\n' > "${PKG}/source.mp4"
+          sha256sum "${PKG}/source.mp4" > "${RUNNER_TEMP}/raw.before"
+
+      - name: Dry-run is non-destructive
+        run: |
+          set -euo pipefail
+          ROOT="${RUNNER_TEMP}/ready"
+          OUT="$(python3 src/legacy_ready_evidence_rebuild.py --root-dir "${ROOT}" --max-packages 10)"
+          echo "${OUT}"
+          grep -q 'mode=dry_run candidates=1 rebuilt=0 failed=0 raw_media_used=0' <<<"${OUT}"
+          test ! -f "${ROOT}/0123456789abcdefabcd/evidence-summary.json"
+
+      - name: Apply rebuild from compact artifacts only
+        run: |
+          set -euo pipefail
+          ROOT="${RUNNER_TEMP}/ready"
+          OUT="$(python3 src/legacy_ready_evidence_rebuild.py --root-dir "${ROOT}" --max-packages 10 --apply)"
+          echo "${OUT}"
+          grep -q 'mode=apply candidates=1 rebuilt=1 failed=0 raw_media_used=0' <<<"${OUT}"
+          test -s "${ROOT}/0123456789abcdefabcd/evidence-summary.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ['RUNNER_TEMP']) / 'ready' / '0123456789abcdefabcd' / 'evidence-summary.json'
+          data = json.loads(p.read_text(encoding='utf-8'))
+          assert data['schema_version'] == 1
+          assert data['compactor_version'] == '0.6.2'
+          assert p.stat().st_size <= 3000
+          PY
+          sha256sum "${ROOT}/0123456789abcdefabcd/source.mp4" > "${RUNNER_TEMP}/raw.after"
+          cmp "${RUNNER_TEMP}/raw.before" "${RUNNER_TEMP}/raw.after"
+
+      - name: Second apply is idempotent
+        run: |
+          set -euo pipefail
+          ROOT="${RUNNER_TEMP}/ready"
+          OUT="$(python3 src/legacy_ready_evidence_rebuild.py --root-dir "${ROOT}" --max-packages 10 --apply)"
+          echo "${OUT}"
+          grep -q 'mode=apply candidates=0 rebuilt=0 failed=0 raw_media_used=0' <<<"${OUT}"
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

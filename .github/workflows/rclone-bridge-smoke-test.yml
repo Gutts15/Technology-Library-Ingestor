@@ -1,0 +1,264 @@
+name: Rclone bridge smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/rclone_bridge.py"
+      - "src/evidence_compactor.py"
+      - "src/storage_preflight.py"
+      - "src/media_router.py"
+      - "src/process_record.py"
+      - ".github/workflows/rclone-bridge-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-ingestor-rclone-bridge-test
+  cancel-in-progress: false
+
+jobs:
+  bridge-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TL_TEST_CANARY: TL_RCLONE_CANARY_DO_NOT_LEAK_a91570e3
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install ffmpeg and rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg rclone
+
+      - name: Validate MIME routing preflight classification and rclone env isolation
+        env:
+          RCLONE_CONFIG_TEST_TOKEN: TL_FAKE_RCLONE_CREDENTIAL_6b0f2b93
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'src')
+          import media_router
+          import rclone_bridge
+          import storage_preflight
+
+          assert rclone_bridge.video_suffix({'Name': 'Video sem extensao', 'MimeType': 'video/mp4'}) == '.mp4'
+          assert rclone_bridge.is_supported_video({'Name': 'Video sem extensao', 'MimeType': 'video/mp4'})
+          assert not rclone_bridge.is_supported_video({'Name': 'Imagem sem extensao', 'MimeType': 'image/jpeg'})
+          assert rclone_bridge.video_suffix({'Name': 'normal.MOV', 'MimeType': 'application/octet-stream'}) == '.mov'
+
+          assert media_router.classify_item({'Name': 'Video sem extensao', 'MimeType': 'video/mp4'}) == 'video'
+          assert media_router.classify_item({'Name': 'foto.JPG', 'MimeType': 'application/octet-stream'}) == 'image'
+          assert media_router.classify_item({'Name': 'voz.mp3', 'MimeType': 'application/octet-stream'}) == 'audio'
+          assert media_router.classify_item({'Name': 'arquivo', 'MimeType': 'application/pdf'}) == 'document'
+          assert media_router.classify_item({'Name': 'notas.md', 'MimeType': 'application/octet-stream'}) == 'text'
+          assert media_router.classify_item({'Name': 'atalho.url', 'MimeType': 'application/octet-stream'}) == 'link'
+          assert media_router.classify_item({'Name': 'pacote.zip', 'MimeType': 'application/octet-stream'}) == 'archive'
+          assert media_router.classify_item({'Name': 'misterio.bin', 'MimeType': 'application/octet-stream'}) == 'unknown'
+
+          assert storage_preflight.classify_failure('403 account disabled') == 'auth_or_access_failed'
+          assert storage_preflight.classify_failure('429 too many requests') == 'rate_limited'
+          assert storage_preflight.classify_failure('connection timed out') == 'network_failed'
+          assert storage_preflight.classify_failure('404 object not found') == 'remote_not_found'
+          assert storage_preflight.classify_failure('unknown backend failure') == 'remote_unavailable'
+
+          assert 'RCLONE_CONFIG_FAKE_TYPE' in os.environ
+          assert 'RCLONE_CONFIG_TEST_TOKEN' in os.environ
+          rclone_bridge.capture_rclone_environment()
+          assert 'RCLONE_CONFIG_FAKE_TYPE' not in os.environ
+          assert 'RCLONE_CONFIG_TEST_TOKEN' not in os.environ
+          assert rclone_bridge._RCLONE_ENV['RCLONE_CONFIG_FAKE_TYPE'] == 'local'
+          assert rclone_bridge._RCLONE_ENV['RCLONE_CONFIG_TEST_TOKEN'].startswith('TL_FAKE_')
+          print('unified_routing_classification_ok preflight_classification_ok rclone_env_isolation_ok')
+          PY
+
+      - name: Create fake unified private storage
+        run: |
+          mkdir -p tmp/fake-drive/99_INBOX/DROP_HERE
+          mkdir -p tmp/fake-drive/99_INBOX/TO_REVIEW/IMAGES
+          mkdir -p tmp/workspace
+
+          ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=purple:size=320x240:rate=24" -t 1 -pix_fmt yuv420p tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_DRIVE_A.mp4
+          ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=orange:size=320x240:rate=24" -t 1 -pix_fmt yuv420p tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_DRIVE_B.mp4
+          printf 'synthetic image' > tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_IMAGE.jpg
+          printf 'synthetic document' > tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_DOCUMENT.pdf
+          printf 'synthetic audio' > tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_AUDIO.mp3
+          printf 'synthetic text' > tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_TEXT.md
+          printf '[InternetShortcut]\nURL=https://example.invalid\n' > tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_LINK.url
+          printf 'synthetic archive' > tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_ARCHIVE.zip
+          printf 'synthetic unknown' > tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_UNKNOWN.bin
+          printf 'incoming collision' > tmp/fake-drive/99_INBOX/DROP_HERE/PRIVATE_COLLISION.jpg
+          printf 'existing destination' > tmp/fake-drive/99_INBOX/TO_REVIEW/IMAGES/PRIVATE_COLLISION.jpg
+
+      - name: Preflight fake private storage
+        run: |
+          python3 src/storage_preflight.py --remote "fake:$(pwd)/tmp/fake-drive" > tmp/preflight.log 2>&1
+          grep -q "storage_preflight_ok" tmp/preflight.log
+
+      - name: Route unified inbox safely
+        run: |
+          python3 src/media_router.py \
+            --remote "fake:$(pwd)/tmp/fake-drive" \
+            > tmp/media-router.log 2>&1
+          grep -q "media_router_ok scanned=10 videos=2 images=2 audio=1 documents=1 spreadsheets=0 text=1 links=1 archives=1 unknown=1 renamed=1" tmp/media-router.log
+
+      - name: Validate unified routing collision handling and privacy
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('tmp/fake-drive/99_INBOX')
+          drop = root / 'DROP_HERE'
+          review = root / 'TO_REVIEW'
+          errors = root / 'ERROR/UNSORTED'
+          log = Path('tmp/media-router.log').read_text()
+
+          assert list(drop.iterdir()) == []
+          assert {p.name for p in (review / 'VIDEOS').iterdir()} == {'PRIVATE_DRIVE_A.mp4', 'PRIVATE_DRIVE_B.mp4'}
+          assert (review / 'IMAGES/PRIVATE_IMAGE.jpg').is_file()
+          assert (review / 'IMAGES/PRIVATE_COLLISION.jpg').read_text() == 'existing destination'
+          renamed_collision = list((review / 'IMAGES').glob('PRIVATE_COLLISION__*.jpg'))
+          assert len(renamed_collision) == 1
+          assert renamed_collision[0].read_text() == 'incoming collision'
+          assert (review / 'AUDIO/PRIVATE_AUDIO.mp3').is_file()
+          assert (review / 'DOCUMENTS/PRIVATE_DOCUMENT.pdf').is_file()
+          assert (review / 'TEXT/PRIVATE_TEXT.md').is_file()
+          assert (review / 'LINKS/PRIVATE_LINK.url').is_file()
+          assert (review / 'ARCHIVES/PRIVATE_ARCHIVE.zip').is_file()
+          assert (errors / 'PRIVATE_UNKNOWN.bin').is_file()
+
+          for private_name in (
+              'PRIVATE_IMAGE.jpg', 'PRIVATE_DOCUMENT.pdf', 'PRIVATE_AUDIO.mp3',
+              'PRIVATE_TEXT.md', 'PRIVATE_LINK.url', 'PRIVATE_ARCHIVE.zip',
+              'PRIVATE_UNKNOWN.bin', 'PRIVATE_COLLISION.jpg',
+          ):
+              assert private_name not in log
+          print('unified_drop_here_ok collision_autorename_ok unknown_preserved_ok log_privacy_ok')
+          PY
+
+      - name: Run bridge against routed video queue
+        run: |
+          python3 src/rclone_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake-drive" \
+            --workspace tmp/workspace \
+            --provider rclone_test \
+            --batch-size 5 \
+            --max-keyframes 3 \
+            > tmp/bridge-first.log 2>&1
+
+      - name: Validate routing private metadata evidence process records and log privacy
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, 'src')
+          from evidence_compactor import COMPACTOR_VERSION, MAX_SUMMARY_BYTES
+          from process_record import PROCESS_RECORD_SCHEMA_VERSION, PROCESS_RECORD_VERSION
+
+          canary = os.environ['TL_TEST_CANARY']
+          root = Path('tmp/fake-drive')
+          inbox = root / '99_INBOX/TO_REVIEW/VIDEOS'
+          processed = root / '99_INBOX/PROCESSED/VIDEOS'
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+          process_log = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          summary_path = Path('tmp/workspace/bridge-summary.json')
+          summary = json.loads(summary_path.read_text())
+          log = Path('tmp/bridge-first.log').read_text()
+
+          assert summary['pipeline_version'] == '0.5.0'
+          assert summary['selected'] == 2
+          assert summary['processed'] == 2
+          assert summary['errors'] == 0
+          assert list(inbox.iterdir()) == []
+
+          original_names = {'PRIVATE_DRIVE_A.mp4', 'PRIVATE_DRIVE_B.mp4'}
+          assert {p.name for p in processed.iterdir()} == original_names
+
+          package_dirs = sorted(p for p in ready.iterdir() if p.is_dir())
+          assert len(package_dirs) == 2
+          assert all(re.fullmatch(r'[0-9a-f]{20}', p.name) for p in package_dirs)
+
+          record_files = sorted(process_log.glob('*.json'))
+          assert len(record_files) == 2
+          assert {path.stem for path in record_files} == {package.name for package in package_dirs}
+
+          recovered_names = set()
+          for package in package_dirs:
+              for required in ('ingest.json', 'timeline.md', 'contact-sheet.jpg', 'checkpoint.json', 'evidence-summary.json', 'process-record.json'):
+                  path = package / required
+                  assert path.is_file() and path.stat().st_size > 0
+
+              manifest = json.loads((package / 'ingest.json').read_text())
+              evidence_path = package / 'evidence-summary.json'
+              evidence = json.loads(evidence_path.read_text())
+              process_record = json.loads((package / 'process-record.json').read_text())
+              central_record = json.loads((process_log / f'{package.name}.json').read_text())
+
+              assert manifest['source']['provider'] == 'rclone_test'
+              assert isinstance(manifest['source']['file_id'], str) and manifest['source']['file_id']
+              assert manifest['source']['name'] in original_names
+              recovered_names.add(manifest['source']['name'])
+
+              assert evidence['compactor_version'] == COMPACTOR_VERSION
+              assert evidence['source']['provider'] == 'rclone_test'
+              assert evidence['source']['file_id'] == manifest['source']['file_id']
+              assert 'name' not in evidence['source']
+              assert evidence_path.stat().st_size <= MAX_SUMMARY_BYTES
+
+              assert process_record == central_record
+              assert process_record['schema_version'] == PROCESS_RECORD_SCHEMA_VERSION
+              assert process_record['record_version'] == PROCESS_RECORD_VERSION
+              assert process_record['package_id'] == package.name
+              assert process_record['source']['provider'] == 'rclone_test'
+              assert process_record['source']['file_id'] == manifest['source']['file_id']
+              assert process_record['source']['name'] == manifest['source']['name']
+              assert process_record['source']['source_folder'] == '99_INBOX/TO_REVIEW/VIDEOS'
+              assert process_record['processing']['status'] == 'processed'
+              assert process_record['processing']['error_code'] is None
+              assert process_record['processing']['pipeline_version'] == '0.5.0'
+              assert process_record['processing']['compactor_version'] == COMPACTOR_VERSION
+              assert process_record['routing']['destination_folder'] == '99_INBOX/PROCESSED/VIDEOS'
+              assert process_record['routing']['retention_days'] == 30
+
+              timeline = (package / 'timeline.md').read_text()
+              assert 'PRIVATE_DRIVE_A.mp4' not in timeline
+              assert 'PRIVATE_DRIVE_B.mp4' not in timeline
+              assert canary not in timeline
+
+          assert recovered_names == original_names
+          assert 'PRIVATE_DRIVE_A.mp4' not in log
+          assert 'PRIVATE_DRIVE_B.mp4' not in log
+          assert canary not in log
+          assert canary not in summary_path.read_text()
+          print('rclone_bridge_routing_ok process_records_ok private_evidence_ok log_privacy_ok')
+          PY
+
+      - name: Re-run routed video inbox empty
+        run: |
+          rm -rf tmp/workspace-second
+          python3 src/rclone_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake-drive" \
+            --workspace tmp/workspace-second \
+            --provider rclone_test \
+            --batch-size 5 \
+            > tmp/bridge-second.log 2>&1
+          grep -q "bridge_ok pending=0 processed=0 errors=0" tmp/bridge-second.log
+
+      - name: Remove generated data
+        if: always()
+        run: |
+          rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: |
+          test -z "$(git status --porcelain)"

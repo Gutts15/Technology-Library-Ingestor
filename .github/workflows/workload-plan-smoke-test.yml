@@ -1,0 +1,251 @@
+name: Workload planner smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/workload_plan.py"
+      - "src/audio_bridge.py"
+      - "src/audio_ingest.py"
+      - "src/image_bridge.py"
+      - "src/image_ingest.py"
+      - "src/link_bridge.py"
+      - "src/link_ingest.py"
+      - "src/rclone_bridge.py"
+      - "src/spreadsheet_bridge.py"
+      - "src/spreadsheet_ingest.py"
+      - "src/text_document_bridge.py"
+      - "src/text_document_ingest.py"
+      - ".github/workflows/workload-plan-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-workload-plan-test
+  cancel-in-progress: false
+
+jobs:
+  planner-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create synthetic queue backlog
+        run: |
+          python3 - <<'PY'
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path('tmp/fake-storage/99_INBOX/TO_REVIEW')
+          queues = {
+              'LINKS': 25,
+              'IMAGES': 12,
+              'TEXT': 6,
+              'DOCUMENTS': 7,
+              'SPREADSHEETS': 8,
+          }
+          suffixes = {
+              'LINKS': '.url',
+              'IMAGES': '.jpg',
+              'TEXT': '.txt',
+              'DOCUMENTS': '.pdf',
+              'SPREADSHEETS': '.xlsx',
+          }
+          for queue, count in queues.items():
+              folder = root / queue
+              folder.mkdir(parents=True, exist_ok=True)
+              for index in range(count):
+                  (folder / f'PRIVATE_{queue}_{index:03d}{suffixes[queue]}').write_bytes(b'x' * (index + 1))
+
+          (root / 'IMAGES' / 'PRIVATE_IMAGE_UNSUPPORTED.gif').write_bytes(b'gif')
+          (root / 'DOCUMENTS' / 'PRIVATE_DOCUMENT_UNSUPPORTED.doc').write_bytes(b'doc')
+          (root / 'SPREADSHEETS' / 'PRIVATE_SPREADSHEET_UNSUPPORTED.xls').write_bytes(b'xls')
+
+          audio = root / 'AUDIO'
+          video = root / 'VIDEOS'
+          audio.mkdir(parents=True, exist_ok=True)
+          video.mkdir(parents=True, exist_ok=True)
+
+          supported_audio = [audio / 'PRIVATE_AUDIO_OLD.wav', audio / 'PRIVATE_AUDIO_SECOND.mp3']
+          unsupported_audio = audio / 'PRIVATE_AUDIO_UNSUPPORTED.wma'
+          videos = [video / f'PRIVATE_VIDEO_{index}.mp4' for index in range(4)]
+          for path in [*supported_audio, unsupported_audio, *videos]:
+              path.write_bytes(b'media')
+
+          def set_time(path: Path, iso: str):
+              stamp = datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp()
+              os.utime(path, (stamp, stamp))
+
+          set_time(unsupported_audio, '2025-12-01T00:00:00')
+          set_time(supported_audio[0], '2026-01-01T00:00:00')
+          set_time(supported_audio[1], '2026-01-03T00:00:00')
+          for index, path in enumerate(videos):
+              set_time(path, f'2026-01-0{index + 2}T00:00:00')
+          PY
+
+      - name: Plan first bounded run
+        run: |
+          mkdir -p tmp/planner
+          python3 src/workload_plan.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --json-out tmp/planner/plan.json \
+            --env-out tmp/planner/plan.env \
+            > tmp/planner.log 2>&1
+          grep -q "workload_plan_ok" tmp/planner.log
+          grep -q "heavy=audio" tmp/planner.log
+          cat tmp/planner/plan.env >> "${GITHUB_ENV}"
+
+      - name: Mark planner-selected audio step
+        if: env.TL_PLAN_AUDIO_BATCH != '0'
+        run: touch tmp/planner/audio-step-ran
+
+      - name: Mark planner-selected video step
+        if: env.TL_PLAN_VIDEO_BATCH != '0'
+        run: touch tmp/planner/video-step-ran
+
+      - name: Validate GitHub env condition wiring
+        run: |
+          test -f tmp/planner/audio-step-ran
+          test ! -e tmp/planner/video-step-ran
+          test "${TL_PLAN_AUDIO_BATCH}" = "1"
+          test "${TL_PLAN_VIDEO_BATCH}" = "0"
+          test "${TL_PLAN_HEAVY_KIND}" = "audio"
+
+      - name: Validate limits privacy and unsupported filtering
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          plan = json.loads(Path('tmp/planner/plan.json').read_text())
+          env = Path('tmp/planner/plan.env').read_text()
+          log = Path('tmp/planner.log').read_text()
+
+          assert plan['planner_version'] == '0.1.1'
+          assert plan['heavy_choice'] == 'audio'
+          assert plan['policy']['one_heavy_queue_per_run'] is True
+          assert plan['policy']['runtime_prediction'] is False
+          assert plan['policy']['unsupported_items_wake_processors'] is False
+          assert plan['batches'] == {
+              'links': 20,
+              'images': 10,
+              'content': 10,
+              'spreadsheets': 5,
+              'audio': 1,
+              'videos': 0,
+          }
+          assert plan['queues']['audio']['pending'] == 2
+          assert plan['queues']['audio']['preserved_unsupported'] == 1
+          assert plan['queues']['videos']['pending'] == 4
+          assert plan['queues']['images']['pending'] == 12
+          assert plan['queues']['images']['preserved_unsupported'] == 1
+          assert plan['queues']['text']['pending'] == 6
+          assert plan['queues']['documents']['pending'] == 7
+          assert plan['queues']['documents']['preserved_unsupported'] == 1
+          assert plan['queues']['spreadsheets']['pending'] == 8
+          assert plan['queues']['spreadsheets']['preserved_unsupported'] == 1
+          assert plan['totals']['raw_pending_files'] == 68
+          assert plan['totals']['supported_pending_files'] == 64
+          assert plan['totals']['preserved_unsupported_files'] == 4
+          assert 'TL_PLAN_AUDIO_BATCH=1' in env
+          assert 'TL_PLAN_VIDEO_BATCH=0' in env
+          assert 'TL_PLAN_CONTENT_BATCH=10' in env
+          assert 'TL_PLAN_HEAVY_KIND=audio' in env
+
+          combined = Path('tmp/planner/plan.json').read_text() + env + log
+          assert 'PRIVATE_' not in combined
+          assert '.wav' not in combined
+          assert '.wma' not in combined
+          assert '.mp4' not in combined
+          assert '.gif' not in combined
+          assert '.doc' not in combined
+          assert '.xls' not in combined
+          print('workload_limits_ok all_unsupported_filter_ok privacy_ok')
+          PY
+
+      - name: Remove supported audio and replan
+        run: |
+          rm -f \
+            tmp/fake-storage/99_INBOX/TO_REVIEW/AUDIO/PRIVATE_AUDIO_OLD.wav \
+            tmp/fake-storage/99_INBOX/TO_REVIEW/AUDIO/PRIVATE_AUDIO_SECOND.mp3
+          rm -rf tmp/planner-video
+          mkdir -p tmp/planner-video
+          python3 src/workload_plan.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --json-out tmp/planner-video/plan.json \
+            --env-out tmp/planner-video/plan.env \
+            > tmp/planner-video.log 2>&1
+          grep -q "heavy=video" tmp/planner-video.log
+
+      - name: Validate unsupported audio cannot starve video
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          plan = json.loads(Path('tmp/planner-video/plan.json').read_text())
+          assert plan['heavy_choice'] == 'video'
+          assert plan['queues']['audio']['pending'] == 0
+          assert plan['queues']['audio']['preserved_unsupported'] == 1
+          assert plan['batches']['audio'] == 0
+          assert plan['batches']['videos'] == 3
+          assert 'TL_PLAN_HEAVY_KIND=video' in Path('tmp/planner-video/plan.env').read_text()
+          assert 'PRIVATE_' not in Path('tmp/planner-video.log').read_text()
+          print('heavy_fairness_ok unsupported_audio_no_starvation')
+          PY
+
+      - name: Leave only unsupported cheap formats and replan
+        run: |
+          rm -f tmp/fake-storage/99_INBOX/TO_REVIEW/IMAGES/*.jpg
+          rm -f tmp/fake-storage/99_INBOX/TO_REVIEW/DOCUMENTS/*.pdf
+          rm -f tmp/fake-storage/99_INBOX/TO_REVIEW/SPREADSHEETS/*.xlsx
+          rm -rf tmp/planner-preserved
+          mkdir -p tmp/planner-preserved
+          python3 src/workload_plan.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --json-out tmp/planner-preserved/plan.json \
+            --env-out tmp/planner-preserved/plan.env \
+            > tmp/planner-preserved.log 2>&1
+
+      - name: Validate unsupported cheap queues do not wake processors
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          plan = json.loads(Path('tmp/planner-preserved/plan.json').read_text())
+          assert plan['queues']['images']['pending'] == 0
+          assert plan['queues']['images']['preserved_unsupported'] == 1
+          assert plan['queues']['documents']['pending'] == 0
+          assert plan['queues']['documents']['preserved_unsupported'] == 1
+          assert plan['queues']['spreadsheets']['pending'] == 0
+          assert plan['queues']['spreadsheets']['preserved_unsupported'] == 1
+          assert plan['batches']['images'] == 0
+          assert plan['batches']['spreadsheets'] == 0
+          assert plan['batches']['content'] == 6
+          env = Path('tmp/planner-preserved/plan.env').read_text()
+          assert 'TL_PLAN_IMAGE_BATCH=0' in env
+          assert 'TL_PLAN_SPREADSHEET_BATCH=0' in env
+          assert 'PRIVATE_' not in (Path('tmp/planner-preserved/plan.json').read_text() + env + Path('tmp/planner-preserved.log').read_text())
+          print('unsupported_cheap_no_wakeup_ok')
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

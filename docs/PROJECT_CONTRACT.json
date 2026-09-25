@@ -1,0 +1,41 @@
+{
+  "project": "Technology Library",
+  "charter_version": "1.0",
+  "project_status": "IN_PROGRESS",
+  "core_release": "Technology-Library-Ingestor v1.0.0",
+  "north_star": "Drop interesting material into the private Drive inbox and walk away; the system autonomously filters, processes, consolidates, safely promotes and indexes useful knowledge for later retrieval.",
+  "black_box_acceptance_status": "NOT_RUN",
+  "hard_constraints": {
+    "mandatory_additional_recurring_cost_brl": 0,
+    "user_pc_required_for_normal_operation": false,
+    "manual_content_review_required": false,
+    "manual_candidate_review_required": false,
+    "manual_batch_approval_required": false,
+    "manual_canonical_approval_required": false,
+    "automatic_canonical_promotion_required": true,
+    "private_user_content_must_remain_private": true,
+    "public_code_repository_target_after_security_audit": true
+  },
+  "normal_flow_human_actions_allowed": [],
+  "exceptional_human_actions_allowed": [
+    "initial credential/setup administration",
+    "policy/charter changes",
+    "credential rotation",
+    "exceptional recovery after automated recovery failure",
+    "explicit user-requested inspection",
+    "repository visibility/security administration when not safely automatable"
+  ],
+  "completion_requires": [
+    "automatic inbox detection",
+    "bounded resumable processing",
+    "automatic value/relevance disposition",
+    "automatic deduplication and clustering",
+    "automatic create/update/unchanged decision",
+    "automatic policy-based canonical promotion",
+    "automatic index rebuild and verification",
+    "automatic ordinary failure recovery",
+    "selective retrieval of resulting knowledge",
+    "500-item mixed-backlog black-box acceptance pass",
+    "zero routine manual validation"
+  ]
+}

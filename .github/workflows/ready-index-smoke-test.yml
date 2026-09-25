@@ -1,0 +1,271 @@
+name: Ready index smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/ready_index.py"
+      - "src/package_contracts.py"
+      - ".github/workflows/ready-index-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-ready-index-test
+  cancel-in-progress: false
+
+jobs:
+  ready-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Validate defensive numeric parsing
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'src')
+          from ready_index import safe_int
+          assert safe_int('17') == 17
+          assert safe_int('not-a-number') == 0
+          assert safe_int(None) == 0
+          assert safe_int(-5) == 0
+          print('ready_index_safe_int_ok')
+          PY
+
+      - name: Create synthetic ready packages with private canaries
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone, timedelta
+          from pathlib import Path
+
+          roots = [
+              Path('tmp/local-ready'),
+              Path('tmp/fake-storage/99_INBOX/READY_FOR_ANALYSIS'),
+          ]
+          base = {'ingest.json', 'checkpoint.json', 'evidence-summary.json', 'process-record.json'}
+          definitions = [
+              ('aaaaaaaaaaaaaaaaaaaa', '99_INBOX/TO_REVIEW/VIDEOS', base | {'timeline.md', 'contact-sheet.jpg'}, 'error'),
+              ('bbbbbbbbbbbbbbbbbbbb', '99_INBOX/TO_REVIEW/IMAGES', base | {'image-index.json', 'preview.jpg'}, 'processed'),
+              ('cccccccccccccccccccc', '99_INBOX/TO_REVIEW/AUDIO', base | {'audio-index.json', 'preview.opus'}, 'processed'),
+              ('dddddddddddddddddddd', '99_INBOX/TO_REVIEW/TEXT', base | {'content-index.json'}, 'processed'),
+              ('eeeeeeeeeeeeeeeeeeee', '99_INBOX/TO_REVIEW/DOCUMENTS', base | {'content-index.json'}, 'processed'),
+              ('ffffffffffffffffffff', '99_INBOX/TO_REVIEW/SPREADSHEETS', base | {'spreadsheet-index.json'}, 'processed'),
+              ('11111111111111111111', '99_INBOX/TO_REVIEW/LINKS', base | {'link-index.json'}, 'processed'),
+              ('22222222222222222222', '99_INBOX/TO_REVIEW/IMAGES', base | {'image-index.json'}, 'processed'),
+              ('33333333333333333333', '99_INBOX/TO_REVIEW/UNKNOWN', base, 'processed'),
+          ]
+
+          started = datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)
+          for root in roots:
+              root.mkdir(parents=True, exist_ok=True)
+              for index, (pid, source_folder, files, status) in enumerate(definitions):
+                  package = root / pid
+                  package.mkdir(parents=True, exist_ok=True)
+                  record = {
+                      'schema_version': 1,
+                      'record_version': '0.1.0',
+                      'source': {
+                          'provider': 'PRIVATE_PROVIDER_CANARY',
+                          'file_id': f'PRIVATE_FILE_ID_{index}',
+                          'name': f'PRIVATE_SOURCE_NAME_{index}.mp4',
+                          'media_type': 'PRIVATE_MIME_CANARY',
+                          'source_folder': source_folder,
+                          'received_at': '2026-09-08T09:00:00+00:00',
+                      },
+                      'package_id': pid,
+                      'processing': {
+                          'status': status,
+                          'error_code': 'PRIVATE_ERROR_DETAIL_CANARY',
+                          'retryable': status == 'error',
+                          'processed_at': (started + timedelta(minutes=index)).isoformat(),
+                          'pipeline_version': '0.1.0',
+                          'compactor_version': '0.1.0',
+                      },
+                      'routing': {
+                          'destination_folder': 'PRIVATE_DESTINATION_CANARY',
+                          'keep_original': False,
+                          'source_recoverable': True,
+                          'retention_days': 30,
+                      },
+                  }
+                  for filename in files:
+                      path = package / filename
+                      if filename == 'process-record.json':
+                          path.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+                      elif filename == 'evidence-summary.json':
+                          path.write_text(json.dumps({'PRIVATE_EVIDENCE_TEXT': f'PRIVATE_EVIDENCE_{index}'}) + '\n', encoding='utf-8')
+                      else:
+                          path.write_bytes(b'x')
+                  stamp = (started + timedelta(minutes=index)).timestamp()
+                  os.utime(package, (stamp, stamp))
+
+              missing = root / '44444444444444444444'
+              missing.mkdir(parents=True, exist_ok=True)
+              (missing / 'evidence-summary.json').write_text('{"PRIVATE":"PRIVATE_MISSING_RECORD"}\n', encoding='utf-8')
+              old = (started - timedelta(hours=2)).timestamp()
+              os.utime(missing, (old, old))
+
+              bad = root / 'PRIVATE_BAD_DIRECTORY'
+              bad.mkdir(parents=True, exist_ok=True)
+              (bad / 'PRIVATE_FILE.txt').write_text('PRIVATE_BAD_DIR_CANARY', encoding='utf-8')
+          PY
+
+      - name: Build local ready index
+        run: |
+          python3 src/ready_index.py \
+            --root-dir tmp/local-ready \
+            --out tmp/local-ready-index.json \
+            --max-packages 20 \
+            > tmp/local-ready-index.log 2>&1
+          grep -q "ready_index_ok" tmp/local-ready-index.log
+
+      - name: Validate index routing completeness and privacy
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          index = json.loads(Path('tmp/local-ready-index.json').read_text())
+          assert index['schema_version'] == 1
+          assert index['index_version'] == '0.1.1'
+          assert index['source'] == '99_INBOX/READY_FOR_ANALYSIS'
+          assert index['window']['packages_seen'] == 10
+          assert index['window']['packages_selected'] == 10
+          assert index['window']['invalid_directories'] == 1
+          assert index['window']['invalid_records'] == 1
+          assert index['window']['packages_indexed'] == 9
+          assert index['window']['complete_packages'] == 7
+          assert index['window']['eligible_packages'] == 7
+          assert index['by_kind'] == {
+              'video': 1,
+              'image': 2,
+              'audio': 1,
+              'text': 1,
+              'document': 1,
+              'spreadsheet': 1,
+              'link': 1,
+              'unknown': 1,
+          }
+
+          items = {item['package_id']: item for item in index['items']}
+          video = items['aaaaaaaaaaaaaaaaaaaa']
+          assert video['kind'] == 'video'
+          assert video['processing_status'] == 'error'
+          assert video['complete'] is True
+          assert video['eligible_for_analysis'] is True
+          assert video['detail_path'].endswith('/aaaaaaaaaaaaaaaaaaaa/timeline.md')
+          assert video['preview_path'].endswith('/aaaaaaaaaaaaaaaaaaaa/contact-sheet.jpg')
+          assert video['evidence_path'].endswith('/aaaaaaaaaaaaaaaaaaaa/evidence-summary.json')
+          assert video['evidence_bytes'] > 0
+
+          image = items['bbbbbbbbbbbbbbbbbbbb']
+          assert image['complete'] is True
+          assert image['detail_path'].endswith('/image-index.json')
+          assert image['preview_path'].endswith('/preview.jpg')
+
+          incomplete = items['22222222222222222222']
+          assert incomplete['kind'] == 'image'
+          assert incomplete['complete'] is False
+          assert incomplete['eligible_for_analysis'] is False
+          assert incomplete['preview_path'] is None
+
+          unknown = items['33333333333333333333']
+          assert unknown['kind'] == 'unknown'
+          assert unknown['complete'] is False
+          assert unknown['eligible_for_analysis'] is False
+
+          combined = Path('tmp/local-ready-index.json').read_text() + Path('tmp/local-ready-index.log').read_text()
+          for forbidden in (
+              'PRIVATE_SOURCE_NAME', 'PRIVATE_FILE_ID', 'PRIVATE_PROVIDER',
+              'PRIVATE_EVIDENCE', 'PRIVATE_DESTINATION', 'PRIVATE_MIME',
+              'PRIVATE_BAD_DIRECTORY', 'PRIVATE_ERROR_DETAIL'
+          ):
+              assert forbidden not in combined
+          assert len(Path('tmp/local-ready-index.json').read_bytes()) <= 96 * 1024
+          print('ready_index_contract_ok completeness_ok privacy_ok')
+          PY
+
+      - name: Build and persist through fake rclone storage
+        run: |
+          python3 src/ready_index.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --out tmp/remote-ready-index.json \
+            --max-packages 20 \
+            > tmp/remote-ready-index.log 2>&1
+          grep -q "uploaded=1" tmp/remote-ready-index.log
+
+      - name: Validate remote index parity and destination
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          local = json.loads(Path('tmp/local-ready-index.json').read_text())
+          remote = json.loads(Path('tmp/remote-ready-index.json').read_text())
+          persisted = Path('tmp/fake-storage/99_INBOX/CURATION/READY_INDEX/latest.json')
+          assert persisted.is_file()
+          stored = json.loads(persisted.read_text())
+          for key in ('window', 'by_kind', 'items'):
+              assert remote[key] == local[key]
+              assert stored[key] == local[key]
+          assert 'PRIVATE_' not in persisted.read_text()
+          assert 'PRIVATE_' not in Path('tmp/remote-ready-index.log').read_text()
+          print('ready_index_remote_ok persisted_index_ok')
+          PY
+
+      - name: Validate bounded package window
+        run: |
+          python3 src/ready_index.py \
+            --root-dir tmp/local-ready \
+            --out tmp/bounded-ready-index.json \
+            --max-packages 3 \
+            > tmp/bounded-ready-index.log 2>&1
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('tmp/bounded-ready-index.json').read_text())
+          assert data['window']['packages_seen'] == 10
+          assert data['window']['packages_selected'] == 3
+          assert data['window']['packages_indexed'] <= 3
+          assert len(data['items']) <= 3
+          print('ready_index_bound_ok')
+          PY
+
+      - name: Validate empty ready queue
+        run: |
+          mkdir -p tmp/empty-ready
+          python3 src/ready_index.py \
+            --root-dir tmp/empty-ready \
+            --out tmp/empty-ready-index.json \
+            > tmp/empty-ready-index.log 2>&1
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('tmp/empty-ready-index.json').read_text())
+          assert data['window']['packages_seen'] == 0
+          assert data['window']['packages_indexed'] == 0
+          assert data['items'] == []
+          print('ready_index_empty_ok')
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

@@ -1,0 +1,149 @@
+name: Transcription smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/transcription_engine.py"
+      - "src/evidence_compactor.py"
+      - "requirements-transcription.txt"
+      - ".github/workflows/transcription-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-ingestor-transcription-test
+  cancel-in-progress: false
+
+jobs:
+  transcription-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TL_TEST_CANARY: TL_TRANSCRIPTION_CANARY_DO_NOT_LEAK_93d14a27
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install synthetic audio tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng
+
+      - name: Install pinned transcription dependency
+        run: |
+          python3 -m pip install --disable-pip-version-check -r requirements-transcription.txt
+
+      - name: Create synthetic speech video
+        run: |
+          mkdir -p tmp output
+          espeak-ng -v en -s 135 -w tmp/speech.wav "hello technology library one two three four"
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i "color=c=blue:size=320x240:rate=24" \
+            -i tmp/speech.wav \
+            -shortest \
+            -c:v libx264 \
+            -pix_fmt yuv420p \
+            -c:a aac \
+            tmp/PRIVATE_AUDIO_TEST.mp4
+
+      - name: Run ingestor with tiny CPU transcription
+        run: |
+          python3 src/ingest_video.py \
+            tmp/PRIVATE_AUDIO_TEST.mp4 \
+            --out output \
+            --max-keyframes 3 \
+            --transcribe \
+            --whisper-model tiny \
+            --language en \
+            > tmp/ingestor.log 2>&1
+
+      - name: Build compact evidence
+        run: |
+          python3 src/evidence_compactor.py output > tmp/compactor.log 2>&1
+
+      - name: Validate transcription quality and privacy invariants
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          canary = os.environ['TL_TEST_CANARY']
+          manifest_path = Path('output/ingest.json')
+          manifest = json.loads(manifest_path.read_text())
+          log = Path('tmp/ingestor.log').read_text()
+          compactor_log = Path('tmp/compactor.log').read_text()
+
+          assert manifest['processing']['pipeline_version'] == '0.5.0'
+          assert manifest['media']['has_audio'] is True
+          assert manifest['artifacts']['transcript'] == 'transcript.md'
+          assert manifest['artifacts']['transcript_json'] == 'transcript.json'
+
+          stats = manifest['processing']['transcript_stats']
+          assert stats['enabled'] is True
+          assert stats['model'] == 'tiny'
+          assert stats['segments'] >= 1
+          assert stats['segments_with_metrics'] >= 1
+          assert stats['segments_with_metrics'] <= stats['segments']
+          assert stats['suspect_segments'] >= 0
+          assert stats['suspect_ratio'] is not None
+          assert stats['mean_avg_logprob'] is not None
+          assert stats['mean_no_speech_prob'] is not None
+          assert 'transcription_failed' not in manifest['processing']['warnings']
+          assert 'transcription_unavailable' not in manifest['processing']['warnings']
+
+          transcript_json_path = Path('output/transcript.json')
+          transcript_md_path = Path('output/transcript.md')
+          timeline_path = Path('output/timeline.md')
+          evidence_path = Path('output/evidence-summary.json')
+          for path in (transcript_json_path, transcript_md_path, timeline_path, evidence_path):
+              assert path.is_file() and path.stat().st_size > 0
+
+          structured = json.loads(transcript_json_path.read_text())
+          assert structured['schema_version'] == 2
+          assert structured['engine'] == 'faster-whisper'
+          assert structured['model'] == 'tiny'
+          assert len(structured['segments']) >= 1
+          assert structured['quality_summary']['segments_with_metrics'] >= 1
+          assert any(len(segment['text'].strip()) >= 3 for segment in structured['segments'])
+          assert any(isinstance(segment.get('quality'), dict) for segment in structured['segments'])
+
+          evidence = json.loads(evidence_path.read_text())
+          quality = evidence['quality']['transcript']
+          assert quality['basis'] == 'whisper_decode_metrics'
+          assert quality['signal'] in {'low', 'medium', 'high'}
+          assert quality['segments_with_metrics'] >= 1
+          assert evidence_path.stat().st_size <= 3000
+
+          timeline = timeline_path.read_text()
+          assert '- Speech' in timeline
+          assert 'PRIVATE_AUDIO_TEST.mp4' not in timeline
+          assert canary not in timeline
+
+          for path in (manifest_path, transcript_json_path, transcript_md_path, timeline_path, evidence_path):
+              text = path.read_text()
+              assert canary not in text
+          assert 'PRIVATE_AUDIO_TEST.mp4' not in log
+          assert 'PRIVATE_AUDIO_TEST.mp4' not in compactor_log
+          assert canary not in log
+          assert canary not in compactor_log
+
+          print(
+              'transcription_quality_ok '
+              f"segments={len(structured['segments'])} "
+              f"signal={quality['signal']} privacy_invariants_ok"
+          )
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: |
+          rm -rf tmp output
+
+      - name: Verify clean workspace
+        if: always()
+        run: |
+          test -z "$(git status --porcelain)"

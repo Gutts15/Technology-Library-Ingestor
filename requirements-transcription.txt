@@ -1,0 +1,2 @@
+# Optional transcription dependency. Core ingestion does not require this file.
+faster-whisper==1.2.1

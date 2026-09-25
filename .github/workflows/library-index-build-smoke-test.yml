@@ -1,0 +1,124 @@
+name: Library index build smoke test
+
+on:
+  push:
+    paths:
+      - "src/library_index_build.py"
+      - ".github/workflows/library-index-build-smoke-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build valid raw library fixture
+        run: |
+          set -euo pipefail
+          ROOT="${RUNNER_TEMP}/storage"
+          mkdir -p "${ROOT}/00_LIBRARY/04_AI_AGENTS/WORKFLOWS"
+          mkdir -p "${ROOT}/00_LIBRARY/07_DESIGN_CREATIVE/DESIGN_SYSTEMS"
+          cat > "${ROOT}/00_LIBRARY/04_AI_AGENTS/WORKFLOWS/technology-example-tool.md" <<'MD'
+          RECORD_ID: 0123456789abcdefabcd
+          TYPE: TECHNOLOGY
+          STATUS: TEST
+          DOMAIN: 04_AI_AGENTS
+          CATEGORY: WORKFLOWS
+          TITLE: Example Tool
+
+          # Example Tool
+          MD
+          cat > "${ROOT}/00_LIBRARY/07_DESIGN_CREATIVE/DESIGN_SYSTEMS/technology-figma.md" <<'MD'
+          RECORD_ID: abcdef0123456789abcd
+          TYPE: TECHNOLOGY
+          STATUS: REFERENCE
+          DOMAIN: 07_DESIGN_CREATIVE
+          CATEGORY: DESIGN_SYSTEMS
+          TITLE: Figma
+
+          # Figma
+          MD
+          echo "TL_ROOT=${ROOT}" >> "${GITHUB_ENV}"
+
+      - name: Dry run is non-mutating
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/library_index_build.py --root-dir "${TL_ROOT}")"
+          echo "${OUT}"
+          grep -q 'library_index_build_ok mode=dry_run records=2 indexes=3 planned=3 updated=0 unchanged=0' <<<"${OUT}"
+          test ! -e "${TL_ROOT}/00_LIBRARY/MASTER_INDEX.md"
+
+      - name: Apply indexes
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/library_index_build.py --root-dir "${TL_ROOT}" --apply)"
+          echo "${OUT}"
+          grep -q 'library_index_build_ok mode=apply records=2 indexes=3 planned=3 updated=3 unchanged=0' <<<"${OUT}"
+          grep -q '^RECORDS: 2$' "${TL_ROOT}/00_LIBRARY/MASTER_INDEX.md"
+          grep -q 'TECHNOLOGY - Figma \[REFERENCE\]' "${TL_ROOT}/00_LIBRARY/MASTER_INDEX.md"
+          grep -q '^# INDEX — 04_AI_AGENTS$' "${TL_ROOT}/00_LIBRARY/04_AI_AGENTS/INDEX.md"
+          grep -q '^# INDEX — 07_DESIGN_CREATIVE$' "${TL_ROOT}/00_LIBRARY/07_DESIGN_CREATIVE/INDEX.md"
+
+      - name: Reapply is idempotent
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/library_index_build.py --root-dir "${TL_ROOT}" --apply)"
+          echo "${OUT}"
+          grep -q 'library_index_build_ok mode=apply records=2 indexes=3 planned=0 updated=0 unchanged=3' <<<"${OUT}"
+
+      - name: Reject duplicate canonical title
+        run: |
+          set -euo pipefail
+          mkdir -p "${TL_ROOT}/00_LIBRARY/02_WEB_DEVELOPMENT/UI_COMPONENTS"
+          cat > "${TL_ROOT}/00_LIBRARY/02_WEB_DEVELOPMENT/UI_COMPONENTS/technology-figma.md" <<'MD'
+          RECORD_ID: fedcba9876543210abcd
+          TYPE: TECHNOLOGY
+          STATUS: TEST
+          DOMAIN: 02_WEB_DEVELOPMENT
+          CATEGORY: UI_COMPONENTS
+          TITLE: Figma
+
+          # Duplicate
+          MD
+          set +e
+          OUT="$(python3 src/library_index_build.py --root-dir "${TL_ROOT}")"
+          RC=$?
+          set -e
+          echo "${OUT}"
+          test "${RC}" -eq 2
+          grep -q 'library_index_build_error code=duplicate_canonical_title:TECHNOLOGY:Figma' <<<"${OUT}"
+          rm "${TL_ROOT}/00_LIBRARY/02_WEB_DEVELOPMENT/UI_COMPONENTS/technology-figma.md"
+
+      - name: Reject path/header mismatch
+        run: |
+          set -euo pipefail
+          sed -i 's/DOMAIN: 04_AI_AGENTS/DOMAIN: 02_WEB_DEVELOPMENT/' \
+            "${TL_ROOT}/00_LIBRARY/04_AI_AGENTS/WORKFLOWS/technology-example-tool.md"
+          set +e
+          OUT="$(python3 src/library_index_build.py --root-dir "${TL_ROOT}")"
+          RC=$?
+          set -e
+          echo "${OUT}"
+          test "${RC}" -eq 2
+          grep -q 'library_index_build_error code=record_path:' <<<"${OUT}"
+
+      - name: Empty library is a safe skip
+        run: |
+          set -euo pipefail
+          EMPTY="${RUNNER_TEMP}/empty"
+          mkdir -p "${EMPTY}/00_LIBRARY"
+          OUT="$(python3 src/library_index_build.py --root-dir "${EMPTY}")"
+          echo "${OUT}"
+          grep -q 'library_index_build_skip reason=no_records' <<<"${OUT}"
+
+      - name: Verify clean repository workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

@@ -1,0 +1,191 @@
+name: Cadence readiness smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/cadence_assess.py"
+      - "src/run_metrics.py"
+      - ".github/workflows/cadence-assess-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-cadence-readiness-test
+  cancel-in-progress: false
+
+jobs:
+  cadence-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create synthetic aggregate metrics states
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('tmp')
+          root.mkdir(exist_ok=True)
+
+          def metrics(total, work, empty, error_rate, p90, audio, video, seen, invalid, latest_backlog, observed=20.0):
+              return {
+                  'schema_version': 1,
+                  'metrics_version': '0.1.0',
+                  'window': {
+                      'reports_seen': seen,
+                      'reports_used': total,
+                      'invalid_reports': invalid,
+                      'PRIVATE_WINDOW_FIELD': 'PRIVATE_WINDOW_CANARY',
+                  },
+                  'runs': {
+                      'total': total,
+                      'work_runs': work,
+                      'empty_plans': empty,
+                      'error_run_rate': error_rate,
+                      'observed_runtime_minutes': observed,
+                      'duration_seconds': {'p90': p90},
+                      'PRIVATE_RUN_ID': 'PRIVATE_RUN_CANARY',
+                  },
+                  'heavy_choice': {
+                      'audio': audio,
+                      'video': video,
+                      'none': max(0, total - audio - video),
+                      'unknown': 0,
+                  },
+                  'backlog_at_plan': {
+                      'supported_pending_files': {
+                          'latest': latest_backlog,
+                          'PRIVATE_NAME': 'PRIVATE_BACKLOG_CANARY',
+                      }
+                  },
+                  'arbitrary': {'package_id': 'PRIVATE_PACKAGE_CANARY'},
+              }
+
+          cases = {
+              'insufficient': metrics(4, 3, 1, 0.0, 300, 1, 1, 5, 1, 2),
+              'ready': metrics(12, 10, 2, 0.0833, 600, 2, 2, 12, 0, 3, observed=42.5),
+              'hold': metrics(12, 10, 2, 0.25, 1600, 2, 2, 12, 0, 4),
+              'waste': metrics(10, 5, 5, 0.0, 500, 2, 1, 10, 0, 0),
+          }
+          for name, payload in cases.items():
+              (root / f'{name}.json').write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+          PY
+
+      - name: Assess insufficient data
+        run: |
+          python3 src/cadence_assess.py \
+            --metrics tmp/insufficient.json \
+            --out tmp/insufficient-assessment.json \
+            > tmp/insufficient.log 2>&1
+          grep -q "state=insufficient_data" tmp/insufficient.log
+
+      - name: Assess ready state and persist through fake storage
+        run: |
+          python3 src/cadence_assess.py \
+            --metrics tmp/ready.json \
+            --out tmp/ready-assessment.json \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            > tmp/ready.log 2>&1
+          grep -q "state=ready_for_cadence_review" tmp/ready.log
+          grep -q "uploaded=1" tmp/ready.log
+
+      - name: Assess unstable hold state
+        run: |
+          python3 src/cadence_assess.py \
+            --metrics tmp/hold.json \
+            --out tmp/hold-assessment.json \
+            > tmp/hold.log 2>&1
+          grep -q "state=hold" tmp/hold.log
+
+      - name: Assess high empty-run waste signal
+        run: |
+          python3 src/cadence_assess.py \
+            --metrics tmp/waste.json \
+            --out tmp/waste-assessment.json \
+            > tmp/waste.log 2>&1
+
+      - name: Validate policy states and privacy
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          insufficient = json.loads(Path('tmp/insufficient-assessment.json').read_text())
+          ready = json.loads(Path('tmp/ready-assessment.json').read_text())
+          hold = json.loads(Path('tmp/hold-assessment.json').read_text())
+          waste = json.loads(Path('tmp/waste-assessment.json').read_text())
+
+          assert insufficient['state'] == 'insufficient_data'
+          assert insufficient['ready'] is False
+          assert set(insufficient['insufficient_data_reasons']) == {
+              'need_more_total_runs', 'need_more_work_runs', 'need_more_heavy_runs'
+          }
+          assert 'too_many_invalid_reports' in insufficient['stability_blockers']
+
+          assert ready['state'] == 'ready_for_cadence_review'
+          assert ready['ready'] is True
+          assert ready['insufficient_data_reasons'] == []
+          assert ready['stability_blockers'] == []
+          assert ready['signals']['heavy_runs'] == 4
+          assert ready['signals']['observed_runtime_minutes'] == 42.5
+          assert ready['signals']['backlog_present'] is True
+          assert ready['signals']['empty_run_waste_signal'] == 'low'
+          assert ready['policy']['exact_schedule_recommendation'] is False
+          assert ready['policy']['job_timeout_seconds'] == 1800
+          assert ready['policy']['maximum_p90_duration_seconds'] == 1500
+
+          assert hold['state'] == 'hold'
+          assert hold['ready'] is False
+          assert set(hold['stability_blockers']) == {
+              'error_rate_too_high', 'p90_too_close_to_job_timeout'
+          }
+
+          assert waste['state'] == 'ready_for_cadence_review'
+          assert waste['ready'] is True
+          assert waste['signals']['empty_run_waste_signal'] == 'high'
+          assert waste['signals']['backlog_present'] is False
+
+          persisted = Path('tmp/fake-storage/99_INBOX/PROCESS_LOG/METRICS/cadence-readiness.json')
+          assert persisted.is_file()
+          assert json.loads(persisted.read_text())['state'] == 'ready_for_cadence_review'
+
+          combined = ''.join(path.read_text() for path in Path('tmp').glob('*assessment.json'))
+          combined += persisted.read_text()
+          assert 'PRIVATE_' not in combined
+          assert len(Path('tmp/ready-assessment.json').read_bytes()) <= 8 * 1024
+          print('cadence_policy_ok readiness_states_ok privacy_ok')
+          PY
+
+      - name: Validate missing metrics fails safely
+        run: |
+          set +e
+          python3 src/cadence_assess.py \
+            --metrics tmp/does-not-exist.json \
+            --out tmp/should-not-exist.json \
+            > tmp/missing.log 2>&1
+          code=$?
+          set -e
+          test "$code" -eq 2
+          grep -q "metrics_invalid_or_missing" tmp/missing.log
+          test ! -e tmp/should-not-exist.json
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

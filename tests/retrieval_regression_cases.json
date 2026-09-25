@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "suite_version": "public-synthetic-1",
+  "current_library_record_count": 0,
+  "fixture_kind": "synthetic_example_not_live_library_state",
+  "cases": [
+    {
+      "id": "synthetic-current-pattern",
+      "phase": "CURRENT",
+      "prompt": "TECH: qual padrão sintético demonstra a rota de recuperação?",
+      "expected_titles": ["Synthetic Pattern Alpha"],
+      "forbidden_titles": [],
+      "max_canonical_records": 3,
+      "source_required": false
+    },
+    {
+      "id": "synthetic-post-candidate",
+      "phase": "POST_CANDIDATE_BATCH",
+      "prompt": "TECH: qual candidato sintético foi validado?",
+      "expected_titles": ["Synthetic Technology Beta"],
+      "forbidden_titles": [],
+      "max_canonical_records": 3,
+      "source_required": false
+    }
+  ]
+}

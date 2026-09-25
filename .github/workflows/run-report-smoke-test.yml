@@ -1,0 +1,209 @@
+name: Run report smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/run_report.py"
+      - ".github/workflows/run-report-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-run-report-test
+  cancel-in-progress: false
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create sanitized plan and private bridge canaries
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('tmp')
+          root.mkdir(exist_ok=True)
+          plan = {
+              'schema_version': 1,
+              'planner_version': '0.1.1',
+              'heavy_choice': 'audio',
+              'batches': {
+                  'links': 2,
+                  'images': 1,
+                  'audio': 1,
+                  'videos': 0,
+                  'content': 2,
+                  'spreadsheets': 1,
+              },
+              'queues': {
+                  'links': {'pending': 2, 'bytes': 200, 'preserved_unsupported': 0},
+                  'images': {'pending': 1, 'bytes': 300, 'preserved_unsupported': 1},
+                  'audio': {'pending': 1, 'bytes': 400, 'preserved_unsupported': 1},
+                  'videos': {'pending': 3, 'bytes': 900, 'preserved_unsupported': 0},
+                  'text': {'pending': 1, 'bytes': 100, 'preserved_unsupported': 0},
+                  'documents': {'pending': 1, 'bytes': 500, 'preserved_unsupported': 1},
+                  'spreadsheets': {'pending': 1, 'bytes': 600, 'preserved_unsupported': 1},
+              },
+              'totals': {
+                  'raw_pending_files': 13,
+                  'supported_pending_files': 10,
+                  'preserved_unsupported_files': 4,
+                  'pending_bytes': 3000,
+                  'planned_files': 7,
+              },
+          }
+          (root / 'plan.json').write_text(json.dumps(plan))
+
+          summaries = {
+              'tl-link-ingestor/bridge-summary.json': {
+                  'selected': 2, 'processed': 1, 'finalized': 0, 'rejected': 1,
+                  'errors': 0, 'warnings': 0,
+                  'packages': ['PRIVATE_PACKAGE_LINK_123'],
+                  'results': [{'package_id': 'PRIVATE_LINK_RESULT', 'status': 'rejected'}],
+              },
+              'tl-image-ingestor/bridge-summary.json': {
+                  'selected': 1, 'processed': 1, 'finalized': 0, 'errors': 0,
+                  'packages': ['PRIVATE_IMAGE_PACKAGE'],
+              },
+              'tl-audio-ingestor/bridge-summary.json': {
+                  'selected': 1, 'processed': 1, 'finalized': 0, 'errors': 0,
+                  'packages': ['PRIVATE_AUDIO_PACKAGE'],
+              },
+              'tl-content-ingestor/content-bridge-summary.json': {
+                  'selected': 2, 'processed': 1, 'finalized': 1, 'errors': 0,
+                  'results': [
+                      {'package_id': 'PRIVATE_TEXT_PACKAGE', 'status': 'processed', 'kind': 'text'},
+                      {'package_id': 'PRIVATE_DOCUMENT_PACKAGE', 'status': 'finalized', 'kind': 'document'},
+                  ],
+              },
+              'tl-spreadsheet-ingestor/spreadsheet-bridge-summary.json': {
+                  'selected': 1, 'processed': 1, 'finalized': 0, 'errors': 0,
+                  'results': [{'package_id': 'PRIVATE_SHEET_PACKAGE', 'status': 'processed'}],
+              },
+          }
+          for relative, payload in summaries.items():
+              path = root / relative
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(json.dumps(payload))
+          PY
+
+      - name: Build and upload aggregate run report
+        run: |
+          mkdir -p tmp/storage
+          python3 src/run_report.py \
+            --plan tmp/plan.json \
+            --workspace-root tmp \
+            --out tmp/report.json \
+            --run-id 123456 \
+            --run-attempt 2 \
+            --job-status success \
+            --provider synthetic_provider \
+            --started-epoch 1000 \
+            --finished-epoch 1125 \
+            --remote "fake:$(pwd)/tmp/storage" \
+            > tmp/report.log 2>&1
+          grep -q "run_report_ok" tmp/report.log
+          grep -q "duration=125" tmp/report.log
+          test -f tmp/storage/99_INBOX/PROCESS_LOG/RUNS/run-123456-attempt-2.json
+
+      - name: Validate telemetry counters privacy and dependency groups
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          local = Path('tmp/report.json')
+          remote = Path('tmp/storage/99_INBOX/PROCESS_LOG/RUNS/run-123456-attempt-2.json')
+          report = json.loads(local.read_text())
+          assert json.loads(remote.read_text()) == report
+
+          assert report['report_version'] == '0.1.0'
+          assert report['run']['id'] == '123456'
+          assert report['run']['attempt'] == 2
+          assert report['run']['duration_seconds'] == 125
+          assert report['run']['provider'] == 'synthetic_provider'
+          assert report['plan']['available'] is True
+          assert report['plan']['heavy_choice'] == 'audio'
+          assert report['plan']['totals']['preserved_unsupported_files'] == 4
+          assert report['pipelines']['videos']['planned'] == 0
+          assert report['pipelines']['videos']['summary_present'] is False
+          assert report['pipelines']['links']['rejected'] == 1
+          assert report['pipelines']['content']['processed'] == 1
+          assert report['pipelines']['content']['finalized'] == 1
+          assert report['totals'] == {
+              'planned': 7,
+              'selected': 7,
+              'processed': 5,
+              'finalized': 1,
+              'rejected': 1,
+              'errors': 0,
+              'warnings': 0,
+              'summaries_present': 5,
+          }
+          assert report['dependencies'] == {
+              'storage_rclone': True,
+              'ffmpeg': True,
+              'tesseract': True,
+              'poppler': True,
+              'transcription_python': True,
+              'spreadsheet_python': True,
+          }
+
+          combined = local.read_text() + remote.read_text() + Path('tmp/report.log').read_text()
+          for canary in (
+              'PRIVATE_PACKAGE_LINK_123', 'PRIVATE_LINK_RESULT', 'PRIVATE_IMAGE_PACKAGE',
+              'PRIVATE_AUDIO_PACKAGE', 'PRIVATE_TEXT_PACKAGE', 'PRIVATE_DOCUMENT_PACKAGE',
+              'PRIVATE_SHEET_PACKAGE',
+          ):
+              assert canary not in combined
+          assert len(local.read_bytes()) <= 16 * 1024
+          print('run_report_privacy_ok counters_ok remote_upload_ok')
+          PY
+
+      - name: Validate missing plan degrades safely
+        run: |
+          python3 src/run_report.py \
+            --plan tmp/does-not-exist.json \
+            --workspace-root tmp/empty-workspace \
+            --out tmp/missing-plan-report.json \
+            --run-id 654321 \
+            --run-attempt 1 \
+            --job-status failure \
+            --provider 'invalid/provider' \
+            --started-epoch 2000 \
+            --finished-epoch 2005 \
+            > tmp/missing.log 2>&1
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('tmp/missing-plan-report.json').read_text())
+          assert report['plan']['available'] is False
+          assert report['run']['provider'] == 'rclone'
+          assert report['run']['status'] == 'failure'
+          assert report['totals']['planned'] == 0
+          assert report['totals']['summaries_present'] == 0
+          print('run_report_missing_plan_safe_ok')
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

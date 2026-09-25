@@ -1,0 +1,331 @@
+name: Retention smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/retention_cleanup.py"
+      - "src/package_contracts.py"
+      - ".github/workflows/retention-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-ingestor-retention-test
+  cancel-in-progress: false
+
+jobs:
+  retention-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create synthetic retention states
+        run: |
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+          import sys
+
+          sys.path.insert(0, 'src')
+          from package_contracts import required_package_files
+
+          root = Path('tmp/fake-storage')
+          records = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+          processed_video = root / '99_INBOX/PROCESSED/VIDEOS'
+          processed_sheet = root / '99_INBOX/PROCESSED/SPREADSHEETS'
+          error = root / '99_INBOX/ERROR/VIDEOS'
+          for path in (records, ready, processed_video, processed_sheet, error):
+              path.mkdir(parents=True, exist_ok=True)
+
+          now = datetime.now(timezone.utc)
+
+          cases = [
+              ('aaaaaaaaaaaaaaaaaaaa', 'PRIVATE_ELIGIBLE.mp4', 40, 'processed', False, False, 30, True),
+              ('bbbbbbbbbbbbbbbbbbbb', 'PRIVATE_KEEP.mp4', 100, 'processed', True, False, 30, True),
+              ('cccccccccccccccccccc', 'PRIVATE_RECENT.mp4', 5, 'processed', False, False, 30, True),
+              ('dddddddddddddddddddd', 'PRIVATE_ERROR.mp4', 100, 'error', False, False, 30, True),
+              ('eeeeeeeeeeeeeeeeeeee', 'PRIVATE_INCOMPLETE.mp4', 100, 'processed', False, False, 30, False),
+              ('ffffffffffffffffffff', 'PRIVATE_RECOVERABLE.mp4', 8, 'processed', False, True, None, True),
+          ]
+
+          for pkg, name, age, status, keep, recoverable, retention_days, complete in cases:
+              inbox = '99_INBOX/TO_REVIEW/VIDEOS'
+              route = {
+                  'destination_folder': '99_INBOX/PROCESSED/VIDEOS',
+                  'keep_original': keep,
+                  'source_recoverable': recoverable,
+              }
+              if retention_days is not None:
+                  route['retention_days'] = retention_days
+              record = {
+                  'schema_version': 1,
+                  'record_version': '0.1.0',
+                  'source': {
+                      'provider': 'rclone_test',
+                      'file_id': f'id-{pkg}',
+                      'name': name,
+                      'media_type': 'video/mp4',
+                      'source_folder': inbox,
+                      'received_at': (now - timedelta(days=age + 1)).isoformat(),
+                  },
+                  'package_id': pkg,
+                  'processing': {
+                      'status': status,
+                      'error_code': None if status == 'processed' else 'synthetic_failure',
+                      'retryable': False,
+                      'processed_at': (now - timedelta(days=age)).isoformat(),
+                      'pipeline_version': '0.5.0',
+                      'compactor_version': '0.6.2',
+                  },
+                  'routing': route,
+              }
+              (records / f'{pkg}.json').write_text(json.dumps(record, indent=2) + '\n')
+              package = ready / pkg
+              package.mkdir(parents=True, exist_ok=True)
+              (package / 'process-record.json').write_text(json.dumps(record, indent=2) + '\n')
+              if complete:
+                  required = required_package_files(inbox)
+                  assert required
+                  for filename in required:
+                      if filename != 'process-record.json':
+                          (package / filename).write_text('{}\n')
+              target = error if status == 'error' else processed_video
+              (target / name).write_text('synthetic private source')
+
+          # Complete spreadsheet: retention should accept it only because its
+          # spreadsheet-index.json exists.
+          pkg = '12121212121212121212'
+          name = 'PRIVATE_SHEET_COMPLETE.xlsx'
+          inbox = '99_INBOX/TO_REVIEW/SPREADSHEETS'
+          record = {
+              'schema_version': 1,
+              'record_version': '0.1.0',
+              'source': {
+                  'provider': 'rclone_test',
+                  'file_id': 'id-sheet-complete',
+                  'name': name,
+                  'media_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                  'source_folder': inbox,
+                  'received_at': (now - timedelta(days=41)).isoformat(),
+              },
+              'package_id': pkg,
+              'processing': {
+                  'status': 'processed', 'error_code': None, 'retryable': False,
+                  'processed_at': (now - timedelta(days=40)).isoformat(),
+                  'pipeline_version': '0.1.0', 'compactor_version': '0.1.0',
+              },
+              'routing': {
+                  'destination_folder': '99_INBOX/PROCESSED/SPREADSHEETS',
+                  'keep_original': False, 'source_recoverable': False,
+                  'retention_days': 30,
+              },
+          }
+          (records / f'{pkg}.json').write_text(json.dumps(record, indent=2) + '\n')
+          package = ready / pkg
+          package.mkdir(parents=True, exist_ok=True)
+          required = required_package_files(inbox)
+          assert required and 'spreadsheet-index.json' in required
+          for filename in required:
+              (package / filename).write_text(json.dumps(record) if filename == 'process-record.json' else '{}')
+          (processed_sheet / name).write_text('synthetic complete sheet')
+
+          # Incomplete spreadsheet: generic files exist, but the selective
+          # spreadsheet index is deliberately absent, so cleanup must guard it.
+          pkg = '34343434343434343434'
+          name = 'PRIVATE_SHEET_INCOMPLETE.xlsx'
+          record = {
+              'schema_version': 1,
+              'record_version': '0.1.0',
+              'source': {
+                  'provider': 'rclone_test',
+                  'file_id': 'id-sheet-incomplete',
+                  'name': name,
+                  'media_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                  'source_folder': inbox,
+                  'received_at': (now - timedelta(days=101)).isoformat(),
+              },
+              'package_id': pkg,
+              'processing': {
+                  'status': 'processed', 'error_code': None, 'retryable': False,
+                  'processed_at': (now - timedelta(days=100)).isoformat(),
+                  'pipeline_version': '0.1.0', 'compactor_version': '0.1.0',
+              },
+              'routing': {
+                  'destination_folder': '99_INBOX/PROCESSED/SPREADSHEETS',
+                  'keep_original': False, 'source_recoverable': False,
+                  'retention_days': 30,
+              },
+          }
+          (records / f'{pkg}.json').write_text(json.dumps(record, indent=2) + '\n')
+          package = ready / pkg
+          package.mkdir(parents=True, exist_ok=True)
+          (package / 'process-record.json').write_text(json.dumps(record, indent=2) + '\n')
+          for filename in ('ingest.json', 'checkpoint.json', 'evidence-summary.json'):
+              (package / filename).write_text('{}\n')
+          (processed_sheet / name).write_text('synthetic incomplete sheet')
+          PY
+
+      - name: Dry-run retention
+        run: |
+          mkdir -p tmp/workspace-dry
+          python3 src/retention_cleanup.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --workspace tmp/workspace-dry \
+            > tmp/retention-dry.log 2>&1
+          grep -q "retention_ok mode=dry_run" tmp/retention-dry.log
+          grep -q "eligible=3" tmp/retention-dry.log
+          grep -q "guarded=2" tmp/retention-dry.log
+
+      - name: Validate dry-run changed nothing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('tmp/fake-storage/99_INBOX')
+          processed_video = root / 'PROCESSED/VIDEOS'
+          processed_sheet = root / 'PROCESSED/SPREADSHEETS'
+          assert (processed_video / 'PRIVATE_ELIGIBLE.mp4').is_file()
+          assert (processed_video / 'PRIVATE_RECOVERABLE.mp4').is_file()
+          assert (processed_sheet / 'PRIVATE_SHEET_COMPLETE.xlsx').is_file()
+          assert (processed_sheet / 'PRIVATE_SHEET_INCOMPLETE.xlsx').is_file()
+          assert not (root / 'RETENTION_TRASH' / 'PRIVATE_ELIGIBLE.mp4').exists()
+          log = Path('tmp/retention-dry.log').read_text()
+          for private_name in (
+              'PRIVATE_ELIGIBLE.mp4', 'PRIVATE_KEEP.mp4', 'PRIVATE_RECOVERABLE.mp4',
+              'PRIVATE_SHEET_COMPLETE.xlsx', 'PRIVATE_SHEET_INCOMPLETE.xlsx',
+          ):
+              assert private_name not in log
+          print('retention_dry_run_safe package_contract_dry_guard_ok log_privacy_ok')
+          PY
+
+      - name: Apply quarantine stage
+        run: |
+          mkdir -p tmp/workspace-apply
+          python3 src/retention_cleanup.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --workspace tmp/workspace-apply \
+            --apply \
+            > tmp/retention-apply.log 2>&1
+          grep -q "retention_ok mode=apply" tmp/retention-apply.log
+          grep -q "quarantined=3" tmp/retention-apply.log
+          grep -q "guarded=2" tmp/retention-apply.log
+
+      - name: Validate quarantine guards
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('tmp/fake-storage/99_INBOX')
+          processed_video = root / 'PROCESSED/VIDEOS'
+          processed_sheet = root / 'PROCESSED/SPREADSHEETS'
+          quarantine = root / 'RETENTION_TRASH'
+          records = root / 'PROCESS_LOG/RECORDS'
+
+          assert not (processed_video / 'PRIVATE_ELIGIBLE.mp4').exists()
+          assert not (processed_video / 'PRIVATE_RECOVERABLE.mp4').exists()
+          assert (quarantine / 'PRIVATE_ELIGIBLE.mp4').is_file()
+          assert (quarantine / 'PRIVATE_RECOVERABLE.mp4').is_file()
+          assert (processed_video / 'PRIVATE_KEEP.mp4').is_file()
+          assert (processed_video / 'PRIVATE_RECENT.mp4').is_file()
+          assert (processed_video / 'PRIVATE_INCOMPLETE.mp4').is_file()
+          assert (root / 'ERROR/VIDEOS/PRIVATE_ERROR.mp4').is_file()
+
+          assert not (processed_sheet / 'PRIVATE_SHEET_COMPLETE.xlsx').exists()
+          assert (quarantine / 'PRIVATE_SHEET_COMPLETE.xlsx').is_file()
+          assert (processed_sheet / 'PRIVATE_SHEET_INCOMPLETE.xlsx').is_file()
+          assert not (quarantine / 'PRIVATE_SHEET_INCOMPLETE.xlsx').exists()
+
+          eligible = json.loads((records / 'aaaaaaaaaaaaaaaaaaaa.json').read_text())
+          recoverable = json.loads((records / 'ffffffffffffffffffff.json').read_text())
+          sheet = json.loads((records / '12121212121212121212.json').read_text())
+          incomplete_sheet = json.loads((records / '34343434343434343434.json').read_text())
+          assert eligible['retention']['state'] == 'quarantined'
+          assert eligible['retention']['retention_days'] == 30
+          assert recoverable['retention']['state'] == 'quarantined'
+          assert recoverable['retention']['retention_days'] == 7
+          assert sheet['retention']['state'] == 'quarantined'
+          assert 'retention' not in incomplete_sheet
+          print('retention_quarantine_ok spreadsheet_contract_guard_ok guards_ok')
+          PY
+
+      - name: Age one quarantined record beyond purge grace
+        run: |
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+          root = Path('tmp/fake-storage/99_INBOX')
+          pkg = 'aaaaaaaaaaaaaaaaaaaa'
+          old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+          for path in (
+              root / 'PROCESS_LOG/RECORDS' / f'{pkg}.json',
+              root / 'READY_FOR_ANALYSIS' / pkg / 'process-record.json',
+          ):
+              payload = json.loads(path.read_text())
+              payload['retention']['quarantined_at'] = old
+              path.write_text(json.dumps(payload, indent=2) + '\n')
+          PY
+
+      - name: Apply purge stage
+        run: |
+          rm -rf tmp/workspace-purge
+          mkdir -p tmp/workspace-purge
+          python3 src/retention_cleanup.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --workspace tmp/workspace-purge \
+            --apply \
+            > tmp/retention-purge.log 2>&1
+          grep -q "retention_ok mode=apply" tmp/retention-purge.log
+          grep -q "purged=1" tmp/retention-purge.log
+          grep -q "waiting=2" tmp/retention-purge.log
+          grep -q "guarded=2" tmp/retention-purge.log
+
+      - name: Validate purge and idempotent record state
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('tmp/fake-storage/99_INBOX')
+          quarantine = root / 'RETENTION_TRASH'
+          records = root / 'PROCESS_LOG/RECORDS'
+          assert not (quarantine / 'PRIVATE_ELIGIBLE.mp4').exists()
+          assert (quarantine / 'PRIVATE_RECOVERABLE.mp4').is_file()
+          assert (quarantine / 'PRIVATE_SHEET_COMPLETE.xlsx').is_file()
+          assert (root / 'PROCESSED/SPREADSHEETS/PRIVATE_SHEET_INCOMPLETE.xlsx').is_file()
+          purged = json.loads((records / 'aaaaaaaaaaaaaaaaaaaa.json').read_text())
+          waiting = json.loads((records / 'ffffffffffffffffffff.json').read_text())
+          sheet_waiting = json.loads((records / '12121212121212121212.json').read_text())
+          incomplete_sheet = json.loads((records / '34343434343434343434.json').read_text())
+          assert purged['retention']['state'] == 'purged'
+          assert 'purged_at' in purged['retention']
+          assert waiting['retention']['state'] == 'quarantined'
+          assert sheet_waiting['retention']['state'] == 'quarantined'
+          assert 'retention' not in incomplete_sheet
+          for log_path in ('tmp/retention-apply.log', 'tmp/retention-purge.log'):
+              log = Path(log_path).read_text()
+              assert 'PRIVATE_' not in log
+          print('retention_purge_ok quarantine_grace_ok spreadsheet_guard_persisted_ok log_privacy_ok')
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: |
+          rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: |
+          test -z "$(git status --porcelain)"

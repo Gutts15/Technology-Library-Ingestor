@@ -1,0 +1,226 @@
+name: Link smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/link_ingest.py"
+      - "src/link_bridge.py"
+      - "src/media_router.py"
+      - "src/process_record.py"
+      - ".github/workflows/link-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-link-test
+  cancel-in-progress: false
+
+jobs:
+  link-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+      TL_QUERY_CANARY: TL_QUERY_SECRET_DO_NOT_LEAK_a73f1902
+      TL_FRAGMENT_CANARY: TL_FRAGMENT_SECRET_DO_NOT_LEAK_91bf733c
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Validate MIME-only routing and bridge mapping
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'src')
+          from link_bridge import ingest_suffix
+          from media_router import classify_item
+
+          webloc = {'Name': 'shortcut-without-extension', 'MimeType': 'application/x-webloc'}
+          windows = {'Name': 'shortcut-without-extension', 'MimeType': 'application/internet-shortcut'}
+          assert classify_item(webloc) == 'link'
+          assert classify_item(windows) == 'link'
+          assert ingest_suffix(webloc) == '.webloc'
+          assert ingest_suffix(windows) == '.url'
+          print('link_mime_only_routing_ok')
+          PY
+
+      - name: Create mixed link inbox
+        run: |
+          mkdir -p tmp/fake-storage/99_INBOX/DROP_HERE
+          python3 - <<'PY'
+          import os
+          import plistlib
+          from pathlib import Path
+
+          root = Path('tmp/fake-storage/99_INBOX/DROP_HERE')
+          query = os.environ['TL_QUERY_CANARY']
+          fragment = os.environ['TL_FRAGMENT_CANARY']
+
+          (root / 'PRIVATE_VALID_WINDOWS.url').write_text(
+              '[InternetShortcut]\n'
+              f'URL=https://example.com/docs/page?token={query}#{fragment}\n',
+              encoding='utf-8',
+          )
+
+          with (root / 'PRIVATE_VALID_APPLE.webloc').open('wb') as handle:
+              plistlib.dump(
+                  {'URL': f'https://example.org/reference/item?secret={query}#{fragment}'},
+                  handle,
+                  fmt=plistlib.FMT_XML,
+              )
+
+          (root / 'PRIVATE_REJECTED.url').write_text(
+              '[InternetShortcut]\nURL=file:///home/private/secret.txt\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Route unified inbox
+        run: |
+          python3 src/media_router.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --source "99_INBOX/DROP_HERE" \
+            > tmp/router.log 2>&1
+          grep -q "router_ok" tmp/router.log
+          grep -q "links=3" tmp/router.log
+
+      - name: Run offline Link V1 bridge
+        run: |
+          mkdir -p tmp/link-work
+          python3 src/link_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --workspace tmp/link-work \
+            --provider rclone_test \
+            --batch-size 20 \
+            > tmp/link-bridge.log 2>&1
+          grep -q "link_bridge_ok" tmp/link-bridge.log
+          grep -q "processed=2" tmp/link-bridge.log
+          grep -q "rejected=1" tmp/link-bridge.log
+          grep -q "errors=0" tmp/link-bridge.log
+
+      - name: Validate packages privacy rejection and offline policy
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          query = os.environ['TL_QUERY_CANARY']
+          fragment = os.environ['TL_FRAGMENT_CANARY']
+          root = Path('tmp/fake-storage/99_INBOX')
+          ready = root / 'READY_FOR_ANALYSIS'
+          records = root / 'PROCESS_LOG/RECORDS'
+          packages = [path for path in ready.iterdir() if path.is_dir()]
+          assert len(packages) == 2
+
+          private_indexes = []
+          for package in packages:
+              for required in (
+                  'ingest.json', 'checkpoint.json', 'link-index.json',
+                  'evidence-summary.json', 'process-record.json',
+              ):
+                  path = package / required
+                  assert path.is_file() and path.stat().st_size > 0
+
+              summary_path = package / 'evidence-summary.json'
+              assert summary_path.stat().st_size <= 3072
+              summary_text = summary_path.read_text()
+              summary = json.loads(summary_text)
+              index_text = (package / 'link-index.json').read_text()
+              index = json.loads(index_text)
+              manifest = json.loads((package / 'ingest.json').read_text())
+              record = json.loads((package / 'process-record.json').read_text())
+
+              assert summary['source']['provider'] == 'rclone_test'
+              assert 'name' not in summary['source']
+              assert summary['network'] == {'fetched': False, 'policy': 'offline_v1'}
+              assert index['network'] == {'fetched': False, 'policy': 'offline_v1'}
+              assert manifest['network'] == {'fetched': False, 'policy': 'offline_v1'}
+              assert '?' not in summary['link']['url_without_query_or_fragment']
+              assert '#' not in summary['link']['url_without_query_or_fragment']
+              assert query not in summary_text
+              assert fragment not in summary_text
+              assert record['processing']['status'] == 'processed'
+              assert record['routing']['destination_folder'] == '99_INBOX/PROCESSED/LINKS'
+              private_indexes.append(index_text)
+
+          # Full URL is intentionally retained only in the private index.
+          assert any(query in text and fragment in text for text in private_indexes)
+          assert (root / 'PROCESSED/LINKS/PRIVATE_VALID_WINDOWS.url').is_file()
+          assert (root / 'PROCESSED/LINKS/PRIVATE_VALID_APPLE.webloc').is_file()
+          assert (root / 'ERROR/LINKS/PRIVATE_REJECTED.url').is_file()
+          assert not (root / 'PROCESSED/LINKS/PRIVATE_REJECTED.url').exists()
+
+          rejected = []
+          for path in records.glob('*.json'):
+              payload = json.loads(path.read_text())
+              if payload.get('source', {}).get('name') == 'PRIVATE_REJECTED.url':
+                  rejected.append(payload)
+          assert len(rejected) == 1
+          rejected_record = rejected[0]
+          assert rejected_record['processing']['status'] == 'error'
+          assert rejected_record['processing']['retryable'] is False
+          assert rejected_record['processing']['error_code'] == 'link_scheme_not_allowed'
+          assert rejected_record['routing']['destination_folder'] == '99_INBOX/ERROR/LINKS'
+
+          logs = Path('tmp/router.log').read_text() + Path('tmp/link-bridge.log').read_text()
+          assert 'PRIVATE_' not in logs
+          assert query not in logs
+          assert fragment not in logs
+          assert 'https://example.' not in logs
+          print('link_e2e_ok offline_policy_ok rejection_ok privacy_ok')
+          PY
+
+      - name: Validate unsafe schemes and userinfo locally
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'src')
+          from link_ingest import normalize_url
+
+          cases = {
+              'javascript:alert(1)': 'link_scheme_not_allowed',
+              'data:text/plain,secret': 'link_scheme_not_allowed',
+              'file:///tmp/private': 'link_scheme_not_allowed',
+              'https://user:password@example.com/private': 'link_userinfo_not_allowed',
+          }
+          for value, expected in cases.items():
+              try:
+                  normalize_url(value)
+              except RuntimeError as exc:
+                  assert str(exc) == expected, (value, str(exc), expected)
+              else:
+                  raise AssertionError(f'unsafe link accepted: {value}')
+          print('unsafe_link_rejection_ok')
+          PY
+
+      - name: Re-run bridge idempotently
+        run: |
+          rm -rf tmp/link-work-rerun
+          mkdir -p tmp/link-work-rerun
+          python3 src/link_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake-storage" \
+            --workspace tmp/link-work-rerun \
+            --provider rclone_test \
+            --batch-size 20 \
+            > tmp/link-rerun.log 2>&1
+          grep -q "link_bridge_ok pending=0 selected=0 processed=0 finalized=0 rejected=0 errors=0" tmp/link-rerun.log
+          ! grep -q "PRIVATE_" tmp/link-rerun.log
+          ! grep -q "$TL_QUERY_CANARY" tmp/link-rerun.log
+          ! grep -q "$TL_FRAGMENT_CANARY" tmp/link-rerun.log
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

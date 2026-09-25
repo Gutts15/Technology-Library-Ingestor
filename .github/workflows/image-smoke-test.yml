@@ -1,0 +1,204 @@
+name: Image smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/image_ingest.py"
+      - "src/image_bridge.py"
+      - "src/media_router.py"
+      - "src/process_record.py"
+      - "src/package_contracts.py"
+      - "src/reconcile_queues.py"
+      - ".github/workflows/image-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-image-test
+  cancel-in-progress: false
+
+jobs:
+  image-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+      TL_TEST_CANARY: TL_IMAGE_CANARY_DO_NOT_LEAK_19f7a8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install local image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            fonts-dejavu-core \
+            rclone \
+            tesseract-ocr \
+            tesseract-ocr-eng \
+            tesseract-ocr-por
+
+      - name: Validate MIME-only routing and image package contract
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'src')
+          import image_bridge
+          import media_router
+          from package_contracts import required_package_files
+
+          assert media_router.classify_item({'Name': 'sem extensao', 'MimeType': 'image/jpeg'}) == 'image'
+          assert image_bridge.ingest_suffix({'Name': 'sem extensao', 'MimeType': 'image/jpeg'}) == '.jpg'
+          assert image_bridge.ingest_suffix({'Name': 'sem extensao', 'MimeType': 'image/png'}) == '.png'
+          assert image_bridge.ingest_suffix({'Name': 'sem extensao', 'MimeType': 'image/webp'}) == '.webp'
+          assert image_bridge.ingest_suffix({'Name': 'legacy.gif', 'MimeType': 'image/gif'}) is None
+          required = required_package_files('99_INBOX/TO_REVIEW/IMAGES')
+          assert required and 'image-index.json' in required and 'preview.jpg' in required
+          print('image_mime_routing_ok image_package_contract_ok')
+          PY
+
+      - name: Create mixed image inbox
+        run: |
+          mkdir -p tmp/fake/99_INBOX/DROP_HERE tmp/workspace
+
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i "color=c=white:size=1200x800:rate=1" \
+            -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='TECH LIBRARY IMAGE TEST':fontcolor=black:fontsize=72:x=70:y=330" \
+            -frames:v 1 -y tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.png
+
+          ffmpeg -hide_banner -loglevel error -i tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.png -frames:v 1 -q:v 2 -y tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.jpg
+          ffmpeg -hide_banner -loglevel error -i tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.png -frames:v 1 -y tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.webp
+          ffmpeg -hide_banner -loglevel error -i tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.png -frames:v 1 -y tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.bmp
+          ffmpeg -hide_banner -loglevel error -i tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.png -frames:v 1 -y tmp/fake/99_INBOX/DROP_HERE/PRIVATE_ANIMATION.gif
+          ffmpeg -hide_banner -loglevel error -i tmp/fake/99_INBOX/DROP_HERE/PRIVATE_IMAGE.png -frames:v 1 -y tmp/fake/99_INBOX/DROP_HERE/PRIVATE_SCAN.tiff
+
+      - name: Route unified inbox
+        run: |
+          python3 src/media_router.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            > tmp/router.log 2>&1
+          grep -q "media_router_ok scanned=6 videos=0 images=6" tmp/router.log
+
+      - name: Run Image V1 bridge
+        run: |
+          python3 src/image_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            --workspace tmp/workspace \
+            --provider rclone_test \
+            --batch-size 10 \
+            --ocr \
+            --ocr-languages eng+por \
+            > tmp/image-bridge.log 2>&1
+          grep -q "image_bridge_ok pending=4 selected=4 processed=4 finalized=0 errors=0" tmp/image-bridge.log
+
+      - name: Validate packages previews fingerprints OCR privacy and preservation
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          root = Path('tmp/fake/99_INBOX')
+          ready = root / 'READY_FOR_ANALYSIS'
+          processed = root / 'PROCESSED/IMAGES'
+          review = root / 'TO_REVIEW/IMAGES'
+          records = root / 'PROCESS_LOG/RECORDS'
+
+          supported_names = {
+              'PRIVATE_IMAGE.png', 'PRIVATE_IMAGE.jpg',
+              'PRIVATE_IMAGE.webp', 'PRIVATE_IMAGE.bmp',
+          }
+          assert {p.name for p in processed.iterdir()} == supported_names
+          assert {p.name for p in review.iterdir()} == {'PRIVATE_ANIMATION.gif', 'PRIVATE_SCAN.tiff'}
+
+          packages = sorted(p for p in ready.iterdir() if p.is_dir())
+          assert len(packages) == 4
+          assert len(list(records.glob('*.json'))) == 4
+
+          ocr_hits = 0
+          fingerprints = []
+          for package in packages:
+              for required in (
+                  'ingest.json', 'checkpoint.json', 'image-index.json',
+                  'evidence-summary.json', 'preview.jpg', 'ocr.json', 'process-record.json',
+              ):
+                  path = package / required
+                  assert path.is_file() and path.stat().st_size > 0
+
+              manifest = json.loads((package / 'ingest.json').read_text())
+              index = json.loads((package / 'image-index.json').read_text())
+              summary = json.loads((package / 'evidence-summary.json').read_text())
+              ocr = json.loads((package / 'ocr.json').read_text())
+              record = json.loads((package / 'process-record.json').read_text())
+              central = json.loads((records / f'{package.name}.json').read_text())
+
+              assert manifest['source']['provider'] == 'rclone_test'
+              assert manifest['source']['name'] in supported_names
+              assert 'name' not in summary['source']
+              assert summary['source']['provider'] == 'rclone_test'
+              assert (package / 'evidence-summary.json').stat().st_size <= 3072
+
+              assert index['image']['width'] == 1200
+              assert index['image']['height'] == 800
+              fingerprint = index['fingerprint']['value']
+              assert re.fullmatch(r'[0-9a-f]{16}', fingerprint)
+              fingerprints.append(fingerprint)
+              assert index['privacy']['embedded_metadata_exported'] is False
+              assert index['privacy']['preview_metadata_stripped'] is True
+
+              probe = subprocess.run([
+                  'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                  '-show_entries', 'stream=width,height', '-of', 'json',
+                  str(package / 'preview.jpg'),
+              ], capture_output=True, text=True, check=True)
+              preview = json.loads(probe.stdout)['streams'][0]
+              assert int(preview['width']) <= 1280
+              assert int(preview['height']) <= 1280
+
+              text = ocr.get('text', '').upper()
+              if 'TECH' in text and 'LIBRARY' in text:
+                  ocr_hits += 1
+
+              assert record == central
+              assert record['processing']['status'] == 'processed'
+              assert record['routing']['destination_folder'] == '99_INBOX/PROCESSED/IMAGES'
+
+          assert ocr_hits >= 1
+          assert len(set(fingerprints)) <= 4
+
+          combined_logs = Path('tmp/router.log').read_text() + Path('tmp/image-bridge.log').read_text()
+          for private in (
+              'PRIVATE_IMAGE.png', 'PRIVATE_IMAGE.jpg', 'PRIVATE_IMAGE.webp',
+              'PRIVATE_IMAGE.bmp', 'PRIVATE_ANIMATION.gif', 'PRIVATE_SCAN.tiff',
+          ):
+              assert private not in combined_logs
+          assert os.environ['TL_TEST_CANARY'] not in combined_logs
+          print('image_packages_ok preview_ok fingerprint_ok ocr_ok unsupported_preserved_ok log_privacy_ok')
+          PY
+
+      - name: Re-run idempotently with unsupported images left pending
+        run: |
+          rm -rf tmp/workspace-second
+          python3 src/image_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            --workspace tmp/workspace-second \
+            --provider rclone_test \
+            --batch-size 10 \
+            --ocr \
+            > tmp/image-second.log 2>&1
+          grep -q "image_bridge_ok pending=0 selected=0 processed=0 finalized=0 errors=0" tmp/image-second.log
+          test "$(find tmp/fake/99_INBOX/TO_REVIEW/IMAGES -maxdepth 1 -type f | wc -l)" -eq 2
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

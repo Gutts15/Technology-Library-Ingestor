@@ -1,0 +1,234 @@
+name: Spreadsheet smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/spreadsheet_ingest.py"
+      - "src/spreadsheet_bridge.py"
+      - "src/media_router.py"
+      - "src/process_record.py"
+      - "requirements-spreadsheet.txt"
+      - ".github/workflows/spreadsheet-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-spreadsheet-smoke
+  cancel-in-progress: false
+
+jobs:
+  spreadsheet-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+      TL_TEST_CANARY: TL_SHEET_CANARY_DO_NOT_LEAK_c43c73
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone and pinned spreadsheet dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+          python3 -m pip install --disable-pip-version-check -r requirements-spreadsheet.txt
+
+      - name: Validate MIME-only spreadsheet routing helpers
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'src')
+          import media_router
+          import spreadsheet_bridge
+
+          assert media_router.classify_item({'Name': 'sem extensao', 'MimeType': 'text/csv'}) == 'spreadsheet'
+          assert media_router.classify_item({'Name': 'sem extensao', 'MimeType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}) == 'spreadsheet'
+          assert spreadsheet_bridge.ingest_suffix({'Name': 'sem extensao', 'MimeType': 'text/csv'}) == '.csv'
+          assert spreadsheet_bridge.ingest_suffix({'Name': 'sem extensao', 'MimeType': 'application/vnd.ms-excel.sheet.macroenabled.12'}) == '.xlsm'
+          assert spreadsheet_bridge.ingest_suffix({'Name': 'legacy', 'MimeType': 'application/vnd.ms-excel'}) is None
+          print('spreadsheet_mime_routing_ok')
+          PY
+
+      - name: Create mixed unified spreadsheet inbox
+        run: |
+          mkdir -p tmp/fake/99_INBOX/DROP_HERE tmp/workspace
+
+          python3 - <<'PY'
+          import csv
+          import shutil
+          from pathlib import Path
+          from openpyxl import Workbook
+
+          root = Path('tmp/fake/99_INBOX/DROP_HERE')
+
+          wb = Workbook()
+          ws = wb.active
+          ws.title = 'PRIVATE_BUDGET_SHEET'
+          ws.append(['Item', 'Qty', 'Unit', 'Total'])
+          for i in range(1, 206):
+              row = i + 1
+              ws.append([f'Item-{i:03d}', i, 2.5, f'=B{row}*C{row}'])
+          ws['F1'] = 'FormulaMarker'
+          ws['F2'] = '=SUM(D2:D206)'
+
+          notes = wb.create_sheet('PRIVATE_NOTES')
+          notes.sheet_state = 'hidden'
+          notes.append(['Key', 'Value'])
+          notes.append(['Mode', 'SpreadsheetMarker'])
+          notes.append(['Empty gap', None])
+          notes.append(['Tail', 'IndexMarker'])
+
+          xlsx = root / 'PRIVATE_BUDGET.xlsx'
+          wb.save(xlsx)
+          shutil.copy2(xlsx, root / 'PRIVATE_MODEL.xlsm')
+
+          with (root / 'PRIVATE_DATA.csv').open('w', encoding='utf-8', newline='') as handle:
+              writer = csv.writer(handle)
+              writer.writerow(['Name', 'Value'])
+              writer.writerow(['CsvMarker', 10])
+              writer.writerow(['Second', 20])
+
+          with (root / 'PRIVATE_TABLE.tsv').open('w', encoding='utf-8', newline='') as handle:
+              writer = csv.writer(handle, delimiter='\t')
+              writer.writerow(['Name', 'Value'])
+              writer.writerow(['TsvMarker', 30])
+
+          (root / 'PRIVATE_LEGACY.xls').write_bytes(b'legacy xls preserved')
+          (root / 'PRIVATE_OPEN.ods').write_bytes(b'ods preserved')
+          PY
+
+      - name: Route unified inbox
+        run: |
+          python3 src/media_router.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            > tmp/router.log 2>&1
+          grep -q "media_router_ok scanned=6" tmp/router.log
+          grep -q "spreadsheets=6" tmp/router.log
+
+      - name: Run spreadsheet bridge
+        run: |
+          python3 src/spreadsheet_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            --workspace tmp/workspace \
+            --provider rclone_test \
+            --batch-size 10 \
+            --rows-per-chunk 100 \
+            > tmp/spreadsheet.log 2>&1
+          grep -q "spreadsheet_bridge_ok pending=4 processed=4 finalized=0 errors=0" tmp/spreadsheet.log
+
+      - name: Validate selective packages formulas indexing and privacy
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          root = Path('tmp/fake/99_INBOX')
+          ready = root / 'READY_FOR_ANALYSIS'
+          records = root / 'PROCESS_LOG/RECORDS'
+          processed = root / 'PROCESSED/SPREADSHEETS'
+          pending = root / 'TO_REVIEW/SPREADSHEETS'
+
+          assert {p.name for p in processed.iterdir()} == {
+              'PRIVATE_BUDGET.xlsx', 'PRIVATE_MODEL.xlsm', 'PRIVATE_DATA.csv', 'PRIVATE_TABLE.tsv'
+          }
+          assert {p.name for p in pending.iterdir()} == {'PRIVATE_LEGACY.xls', 'PRIVATE_OPEN.ods'}
+
+          packages = sorted(p for p in ready.iterdir() if p.is_dir())
+          assert len(packages) == 4
+          assert len(list(records.glob('*.json'))) == 4
+
+          private_names = {
+              'PRIVATE_BUDGET.xlsx', 'PRIVATE_MODEL.xlsm', 'PRIVATE_DATA.csv',
+              'PRIVATE_TABLE.tsv', 'PRIVATE_LEGACY.xls', 'PRIVATE_OPEN.ods',
+          }
+          markers = {'CsvMarker': False, 'TsvMarker': False, 'SpreadsheetMarker': False, 'IndexMarker': False}
+          excel_packages = 0
+
+          for package in packages:
+              assert re.fullmatch(r'[0-9a-f]{20}', package.name)
+              for required in (
+                  'ingest.json', 'checkpoint.json', 'spreadsheet-index.json',
+                  'evidence-summary.json', 'process-record.json'
+              ):
+                  assert (package / required).is_file()
+
+              evidence_path = package / 'evidence-summary.json'
+              evidence = json.loads(evidence_path.read_text())
+              manifest = json.loads((package / 'ingest.json').read_text())
+              index = json.loads((package / 'spreadsheet-index.json').read_text())
+              record = json.loads((package / 'process-record.json').read_text())
+              central = json.loads((records / f'{package.name}.json').read_text())
+
+              assert evidence_path.stat().st_size <= 3072
+              assert evidence['source']['provider'] == 'rclone_test'
+              assert 'name' not in evidence['source']
+              assert manifest['source']['provider'] == 'rclone_test'
+              assert manifest['source']['name'] in private_names
+              assert record == central
+              assert record['processing']['status'] == 'processed'
+              assert record['processing']['pipeline_version'] == '0.1.0'
+
+              raw_evidence = evidence_path.read_text()
+              assert 'PRIVATE_BUDGET_SHEET' not in raw_evidence
+              assert 'PRIVATE_NOTES' not in raw_evidence
+              for private_name in private_names:
+                  assert private_name not in raw_evidence
+
+              all_chunks = []
+              for sheet in index['sheets']:
+                  for chunk in sheet['chunks']:
+                      path = package / chunk['path']
+                      assert path.is_file() and path.stat().st_size > 0
+                      all_chunks.append(path.read_text())
+              chunk_text = ''.join(all_chunks)
+              for marker in markers:
+                  if marker in chunk_text:
+                      markers[marker] = True
+
+              if manifest['spreadsheet']['type'] in {'xlsx', 'xlsm'}:
+                  excel_packages += 1
+                  assert len(index['sheets']) == 2
+                  assert index['sheets'][0]['name'] == 'PRIVATE_BUDGET_SHEET'
+                  assert index['sheets'][1]['name'] == 'PRIVATE_NOTES'
+                  assert index['sheets'][1]['state'] == 'hidden'
+                  assert index['totals']['formulas'] >= 206
+                  assert len(index['sheets'][0]['chunks']) == 3
+                  assert '"f":"=B2*C2"' in chunk_text
+                  assert '"f":"=SUM(D2:D206)"' in chunk_text
+
+          assert excel_packages == 2
+          assert all(markers.values())
+
+          logs = Path('tmp/router.log').read_text() + Path('tmp/spreadsheet.log').read_text()
+          for private_name in private_names:
+              assert private_name not in logs
+          assert 'PRIVATE_BUDGET_SHEET' not in logs
+          assert 'PRIVATE_NOTES' not in logs
+          assert os.environ['TL_TEST_CANARY'] not in logs
+          print('spreadsheet_packages_ok formulas_ok chunks_ok legacy_preserved_ok privacy_ok')
+          PY
+
+      - name: Re-run idempotently with only unsupported legacy spreadsheets pending
+        run: |
+          rm -rf tmp/workspace-second
+          python3 src/spreadsheet_bridge.py \
+            --remote "fake:$(pwd)/tmp/fake" \
+            --workspace tmp/workspace-second \
+            --provider rclone_test \
+            --batch-size 10 \
+            --rows-per-chunk 100 \
+            > tmp/spreadsheet-second.log 2>&1
+          grep -q "spreadsheet_bridge_ok pending=0 processed=0 finalized=0 errors=0" tmp/spreadsheet-second.log
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

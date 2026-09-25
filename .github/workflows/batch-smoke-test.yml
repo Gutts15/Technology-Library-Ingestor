@@ -1,0 +1,155 @@
+name: Batch checkpoint smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/batch_ingest.py"
+      - "src/evidence_compactor.py"
+      - ".github/workflows/batch-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-ingestor-batch-test
+  cancel-in-progress: false
+
+jobs:
+  batch-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TL_TEST_CANARY: TL_BATCH_CANARY_DO_NOT_LEAK_280fe137
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Create synthetic queue
+        run: |
+          mkdir -p tmp output
+          ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=red:size=320x240:rate=24" -t 1 -pix_fmt yuv420p tmp/PRIVATE_BATCH_A.mp4
+          ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=green:size=320x240:rate=24" -t 1 -pix_fmt yuv420p tmp/PRIVATE_BATCH_B.mp4
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          queue = {
+              'schema_version': 1,
+              'items': [
+                  {'source': 'tmp/PRIVATE_BATCH_A.mp4', 'source_id': 'drive-test-a'},
+                  {'source': 'tmp/PRIVATE_BATCH_B.mp4', 'source_id': 'drive-test-b'},
+                  {'source': 'tmp/PRIVATE_BATCH_MISSING.mp4', 'source_id': 'drive-test-missing'},
+              ],
+          }
+          Path('tmp/queue.json').write_text(json.dumps(queue))
+          PY
+
+      - name: Process first batch
+        run: |
+          python3 src/batch_ingest.py \
+            --queue tmp/queue.json \
+            --out output \
+            --batch-size 5 \
+            --max-keyframes 3 \
+            > tmp/batch-first.log 2>&1
+          cp output/batch-summary.json tmp/first-summary.json
+
+      - name: Validate failure isolation checkpoints and compact evidence
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, 'src')
+          from evidence_compactor import COMPACTOR_VERSION, MAX_SUMMARY_BYTES
+
+          canary = os.environ['TL_TEST_CANARY']
+          summary = json.loads(Path('tmp/first-summary.json').read_text())
+          log = Path('tmp/batch-first.log').read_text()
+
+          assert summary['pipeline_version'] == '0.5.0'
+          assert summary['compactor_version'] == COMPACTOR_VERSION
+          assert summary['batch_size'] == 3
+          assert summary['counts'] == {'processed': 2, 'skipped': 0, 'errors': 1}
+          assert [item['status'] for item in summary['results']] == ['processed', 'processed', 'error']
+          assert summary['results'][2]['error_code'] == 'source_missing'
+
+          package_dirs = [p for p in Path('output').iterdir() if p.is_dir()]
+          assert len(package_dirs) == 2
+          assert all(re.fullmatch(r'[0-9a-f]{20}', p.name) for p in package_dirs)
+          for package_dir in package_dirs:
+              checkpoint = json.loads((package_dir / 'checkpoint.json').read_text())
+              manifest = json.loads((package_dir / 'ingest.json').read_text())
+              evidence_path = package_dir / 'evidence-summary.json'
+              evidence = json.loads(evidence_path.read_text())
+              assert checkpoint['status'] == 'processed'
+              assert checkpoint['pipeline_version'] == '0.5.0'
+              assert checkpoint['compactor_version'] == COMPACTOR_VERSION
+              assert manifest['processing']['status'] == 'processed'
+              assert evidence['compactor_version'] == COMPACTOR_VERSION
+              assert evidence['quality']['transcript']['signal'] == 'not_applicable'
+              assert evidence['source']['file_id'] in {'drive-test-a', 'drive-test-b'}
+              assert 'name' not in evidence['source']
+              assert evidence_path.stat().st_size <= MAX_SUMMARY_BYTES
+              assert evidence['routing']['preferred_artifact'] in {'evidence-summary.json', 'timeline.md'}
+
+          assert 'PRIVATE_BATCH_A.mp4' not in log
+          assert 'PRIVATE_BATCH_B.mp4' not in log
+          assert 'PRIVATE_BATCH_MISSING.mp4' not in log
+          assert canary not in log
+          assert canary not in Path('tmp/first-summary.json').read_text()
+          print('batch_first_pass_ok evidence_compaction_ok privacy_ok')
+          PY
+
+      - name: Re-run same queue to validate resume
+        run: |
+          python3 src/batch_ingest.py \
+            --queue tmp/queue.json \
+            --out output \
+            --batch-size 5 \
+            --max-keyframes 3 \
+            > tmp/batch-second.log 2>&1
+
+      - name: Validate checkpoint resume
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, 'src')
+          from evidence_compactor import COMPACTOR_VERSION
+
+          canary = os.environ['TL_TEST_CANARY']
+          summary = json.loads(Path('output/batch-summary.json').read_text())
+          log = Path('tmp/batch-second.log').read_text()
+
+          assert summary['compactor_version'] == COMPACTOR_VERSION
+          assert summary['counts'] == {'processed': 0, 'skipped': 2, 'errors': 1}
+          assert [item['status'] for item in summary['results']] == ['skipped', 'skipped', 'error']
+          assert 'PRIVATE_BATCH_A.mp4' not in log
+          assert 'PRIVATE_BATCH_B.mp4' not in log
+          assert canary not in log
+          assert canary not in Path('output/batch-summary.json').read_text()
+          print('batch_resume_ok')
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: |
+          rm -rf tmp output
+
+      - name: Verify clean workspace
+        if: always()
+        run: |
+          test -z "$(git status --porcelain)"

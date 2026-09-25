@@ -1,0 +1,235 @@
+name: Link lifecycle smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/link_ingest.py"
+      - "src/link_bridge.py"
+      - "src/package_contracts.py"
+      - "src/reconcile.py"
+      - "src/reconcile_queues.py"
+      - "src/retention_cleanup.py"
+      - "src/process_record.py"
+      - ".github/workflows/link-lifecycle-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-link-lifecycle-test
+  cancel-in-progress: false
+
+jobs:
+  link-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RCLONE_CONFIG_FAKE_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create link reconciliation states
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, 'src')
+          from package_contracts import required_package_files
+          from process_record import build_process_record
+
+          root = Path('tmp/reconcile')
+          records = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          retry = root / '99_INBOX/PROCESS_LOG/RETRY'
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+          inbox = '99_INBOX/TO_REVIEW/LINKS'
+          records.mkdir(parents=True, exist_ok=True)
+          retry.mkdir(parents=True, exist_ok=True)
+
+          cases = [
+              ('11111111111111111111', 'PRIVATE_LINK_COMPLETE.url', True),
+              ('22222222222222222222', 'PRIVATE_LINK_INCOMPLETE.url', False),
+          ]
+          for pid, name, complete in cases:
+              source = root / inbox / name
+              source.parent.mkdir(parents=True, exist_ok=True)
+              source.write_text('[InternetShortcut]\nURL=https://example.com/\n')
+
+              package = ready / pid
+              package.mkdir(parents=True, exist_ok=True)
+              required = required_package_files(inbox)
+              assert required and 'link-index.json' in required
+              for filename in required:
+                  if complete or filename != 'link-index.json':
+                      (package / filename).write_bytes(b'{}')
+
+              record = build_process_record(
+                  provider='rclone_test',
+                  source_id=f'id-{pid}',
+                  source_name=name,
+                  source_folder=inbox,
+                  package_id=pid,
+                  pipeline_version='0.1.0',
+                  compactor_version='0.1.0',
+                  status='error',
+                  item={'MimeType': 'application/internet-shortcut'},
+                  destination_folder=inbox,
+                  error_code='source_move_failed',
+                  retryable=True,
+                  retention_days=30,
+              )
+              (package / 'process-record.json').write_text(json.dumps(record))
+              (records / f'{pid}.json').write_text(json.dumps(record))
+          PY
+
+      - name: Reconcile link states
+        run: |
+          python3 src/reconcile_queues.py \
+            --remote "fake:$(pwd)/tmp/reconcile" \
+            --workspace tmp/reconcile-work \
+            --max-retries 3 \
+            > tmp/reconcile.log 2>&1
+          grep -q "reconcile_queues_ok" tmp/reconcile.log
+          grep -q "finalized=1" tmp/reconcile.log
+          grep -q "requeued=1" tmp/reconcile.log
+
+      - name: Validate link reconciliation package guard
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('tmp/reconcile/99_INBOX')
+          assert (root / 'PROCESSED/LINKS/PRIVATE_LINK_COMPLETE.url').is_file()
+          assert (root / 'TO_REVIEW/LINKS/PRIVATE_LINK_INCOMPLETE.url').is_file()
+          assert not (root / 'PROCESSED/LINKS/PRIVATE_LINK_INCOMPLETE.url').exists()
+
+          records = root / 'PROCESS_LOG/RECORDS'
+          complete = json.loads((records / '11111111111111111111.json').read_text())
+          incomplete = json.loads((records / '22222222222222222222.json').read_text())
+          assert complete['processing']['status'] == 'processed'
+          assert complete['routing']['destination_folder'] == '99_INBOX/PROCESSED/LINKS'
+          assert incomplete['processing']['status'] == 'retry_queued'
+          assert incomplete['routing']['destination_folder'] == '99_INBOX/TO_REVIEW/LINKS'
+
+          log = Path('tmp/reconcile.log').read_text()
+          assert 'PRIVATE_LINK_COMPLETE.url' not in log
+          assert 'PRIVATE_LINK_INCOMPLETE.url' not in log
+          print('link_reconcile_guard_ok log_privacy_ok')
+          PY
+
+      - name: Create link retention states
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          sys.path.insert(0, 'src')
+          from package_contracts import required_package_files
+
+          root = Path('tmp/retention')
+          records = root / '99_INBOX/PROCESS_LOG/RECORDS'
+          ready = root / '99_INBOX/READY_FOR_ANALYSIS'
+          processed = root / '99_INBOX/PROCESSED/LINKS'
+          for path in (records, ready, processed):
+              path.mkdir(parents=True, exist_ok=True)
+
+          now = datetime.now(timezone.utc)
+          inbox = '99_INBOX/TO_REVIEW/LINKS'
+          for pid, name, complete in (
+              ('33333333333333333333', 'PRIVATE_RETENTION_COMPLETE.url', True),
+              ('44444444444444444444', 'PRIVATE_RETENTION_INCOMPLETE.url', False),
+          ):
+              record = {
+                  'schema_version': 1,
+                  'record_version': '0.1.0',
+                  'source': {
+                      'provider': 'rclone_test',
+                      'file_id': f'id-{pid}',
+                      'name': name,
+                      'media_type': 'application/internet-shortcut',
+                      'source_folder': inbox,
+                      'received_at': (now - timedelta(days=41)).isoformat(),
+                  },
+                  'package_id': pid,
+                  'processing': {
+                      'status': 'processed',
+                      'error_code': None,
+                      'retryable': False,
+                      'processed_at': (now - timedelta(days=40)).isoformat(),
+                      'pipeline_version': '0.1.0',
+                      'compactor_version': '0.1.0',
+                  },
+                  'routing': {
+                      'destination_folder': '99_INBOX/PROCESSED/LINKS',
+                      'keep_original': False,
+                      'source_recoverable': False,
+                      'retention_days': 30,
+                  },
+              }
+              (records / f'{pid}.json').write_text(json.dumps(record))
+              package = ready / pid
+              package.mkdir(parents=True, exist_ok=True)
+              required = required_package_files(inbox)
+              assert required
+              for filename in required:
+                  if complete or filename != 'link-index.json':
+                      if filename == 'process-record.json':
+                          (package / filename).write_text(json.dumps(record))
+                      else:
+                          (package / filename).write_bytes(b'{}')
+              (processed / name).write_text('[InternetShortcut]\nURL=https://example.com/\n')
+          PY
+
+      - name: Dry-run link retention
+        run: |
+          python3 src/retention_cleanup.py \
+            --remote "fake:$(pwd)/tmp/retention" \
+            --workspace tmp/retention-dry \
+            > tmp/retention-dry.log 2>&1
+          grep -q "retention_ok mode=dry_run" tmp/retention-dry.log
+          grep -q "eligible=1" tmp/retention-dry.log
+          grep -q "guarded=1" tmp/retention-dry.log
+
+      - name: Apply and validate link retention guard
+        run: |
+          python3 src/retention_cleanup.py \
+            --remote "fake:$(pwd)/tmp/retention" \
+            --workspace tmp/retention-apply \
+            --apply \
+            > tmp/retention-apply.log 2>&1
+          grep -q "quarantined=1" tmp/retention-apply.log
+          grep -q "guarded=1" tmp/retention-apply.log
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('tmp/retention/99_INBOX')
+          assert (root / 'RETENTION_TRASH/PRIVATE_RETENTION_COMPLETE.url').is_file()
+          assert (root / 'PROCESSED/LINKS/PRIVATE_RETENTION_INCOMPLETE.url').is_file()
+          assert not (root / 'RETENTION_TRASH/PRIVATE_RETENTION_INCOMPLETE.url').exists()
+
+          logs = Path('tmp/retention-dry.log').read_text() + Path('tmp/retention-apply.log').read_text()
+          assert 'PRIVATE_RETENTION_COMPLETE.url' not in logs
+          assert 'PRIVATE_RETENTION_INCOMPLETE.url' not in logs
+          print('link_retention_guard_ok log_privacy_ok')
+          PY
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

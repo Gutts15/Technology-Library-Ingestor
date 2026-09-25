@@ -1,0 +1,233 @@
+name: Curation decision apply smoke test
+
+on:
+  push:
+    paths:
+      - "src/curation_decision_apply.py"
+      - ".github/workflows/curation-decision-apply-smoke-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build sanitized pending fixture
+        run: |
+          set -euo pipefail
+          ROOT="${RUNNER_TEMP}/storage"
+          mkdir -p "${ROOT}/99_INBOX/CURATION/READY_INDEX"
+          cat > "${ROOT}/99_INBOX/CURATION/READY_INDEX/latest.json" <<'JSON'
+          {
+            "schema_version": 1,
+            "items": [
+              {
+                "package_id": "0123456789abcdefabcd",
+                "kind": "video",
+                "complete": true,
+                "eligible_for_analysis": true,
+                "pipeline_version": "0.5.0",
+                "compactor_version": "0.6.2",
+                "evidence_bytes": 900,
+                "evidence_path": "99_INBOX/READY_FOR_ANALYSIS/0123456789abcdefabcd/evidence-summary.json",
+                "detail_path": "99_INBOX/READY_FOR_ANALYSIS/0123456789abcdefabcd/timeline.md",
+                "preview_path": "99_INBOX/READY_FOR_ANALYSIS/0123456789abcdefabcd/contact-sheet.jpg"
+              }
+            ]
+          }
+          JSON
+          python3 src/curation_handoff.py --root-dir "${ROOT}" > "${RUNNER_TEMP}/init.log"
+          REV="$(python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])/'storage'
+          data = json.loads((root/'99_INBOX/CURATION/HANDOFF/latest.json').read_text())
+          print(data['items'][0]['revision_key'])
+          PY
+          )"
+          cat > "${RUNNER_TEMP}/decisions.json" <<JSON
+          {
+            "schema_version": 1,
+            "decisions_version": "0.1.0",
+            "items": [
+              {
+                "package_id": "0123456789abcdefabcd",
+                "revision_key": "${REV}",
+                "state": "analyzed"
+              }
+            ]
+          }
+          JSON
+          echo "TL_ROOT=${ROOT}" >> "${GITHUB_ENV}"
+          echo "TL_REV=${REV}" >> "${GITHUB_ENV}"
+
+      - name: Analyzed decision fails closed without publish receipt
+        run: |
+          set -euo pipefail
+          set +e
+          OUT="$(python3 src/curation_decision_apply.py \
+            --root-dir "${TL_ROOT}" \
+            --decisions "${RUNNER_TEMP}/decisions.json" \
+            --require-publish-receipt)"
+          RC=$?
+          set -e
+          echo "${OUT}"
+          test "${RC}" -eq 2
+          grep -q 'curation_decision_apply_error code=publish_receipt_missing' <<<"${OUT}"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          handoff = json.loads((root/'99_INBOX/CURATION/HANDOFF/latest.json').read_text())
+          assert handoff['pending_total'] == 1
+          PY
+
+      - name: Create matching private publish receipt
+        run: |
+          set -euo pipefail
+          mkdir -p "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE"
+          cat > "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE/latest.json" <<JSON
+          {
+            "schema_version": 1,
+            "publish_state_version": "0.1.0",
+            "publish_version": "0.2.0",
+            "items": [
+              {
+                "package_id": "0123456789abcdefabcd",
+                "revision_key": "${TL_REV}",
+                "record_id": "abcdef0123456789abcd",
+                "target_path": "00_LIBRARY/04_AI_AGENTS/WORKFLOWS/technology-example.md",
+                "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            ]
+          }
+          JSON
+
+      - name: Apply current decision with matching receipt
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/curation_decision_apply.py \
+            --root-dir "${TL_ROOT}" \
+            --decisions "${RUNNER_TEMP}/decisions.json" \
+            --require-publish-receipt)"
+          echo "${OUT}"
+          grep -q 'curation_decision_apply_ok decisions=1 applied=1 stale=0 closed=0' <<<"${OUT}"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          state = json.loads((root/'99_INBOX/CURATION/STATE/latest.json').read_text())
+          handoff = json.loads((root/'99_INBOX/CURATION/HANDOFF/latest.json').read_text())
+          assert state['counts']['analyzed'] == 1
+          assert handoff['pending_total'] == 0
+          PY
+
+      - name: Reapply is idempotent
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/curation_decision_apply.py \
+            --root-dir "${TL_ROOT}" \
+            --decisions "${RUNNER_TEMP}/decisions.json" \
+            --require-publish-receipt)"
+          echo "${OUT}"
+          grep -q 'curation_decision_apply_ok decisions=1 applied=0 stale=0 closed=1' <<<"${OUT}"
+
+      - name: Revised evidence makes old decision stale before receipt check
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          p = root/'99_INBOX/CURATION/READY_INDEX/latest.json'
+          data = json.loads(p.read_text())
+          data['items'][0]['pipeline_version'] = '0.5.1'
+          p.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          python3 src/curation_handoff.py --root-dir "${TL_ROOT}"
+          OUT="$(python3 src/curation_decision_apply.py \
+            --root-dir "${TL_ROOT}" \
+            --decisions "${RUNNER_TEMP}/decisions.json" \
+            --require-publish-receipt)"
+          echo "${OUT}"
+          grep -q 'curation_decision_apply_ok decisions=1 applied=0 stale=1 closed=0' <<<"${OUT}"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          state = json.loads((root/'99_INBOX/CURATION/STATE/latest.json').read_text())
+          assert state['counts']['pending'] == 1
+          assert state['counts']['analyzed'] == 0
+          PY
+
+      - name: Rejected decision does not require publish receipt
+        run: |
+          set -euo pipefail
+          NEW_REV="$(python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          data = json.loads((root/'99_INBOX/CURATION/HANDOFF/latest.json').read_text())
+          print(data['items'][0]['revision_key'])
+          PY
+          )"
+          cat > "${RUNNER_TEMP}/rejected.json" <<JSON
+          {
+            "schema_version": 1,
+            "decisions_version": "0.1.0",
+            "items": [
+              {
+                "package_id": "0123456789abcdefabcd",
+                "revision_key": "${NEW_REV}",
+                "state": "rejected"
+              }
+            ]
+          }
+          JSON
+          rm -f "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE/latest.json"
+          OUT="$(python3 src/curation_decision_apply.py \
+            --root-dir "${TL_ROOT}" \
+            --decisions "${RUNNER_TEMP}/rejected.json" \
+            --require-publish-receipt)"
+          echo "${OUT}"
+          grep -q 'curation_decision_apply_ok decisions=1 applied=1 stale=0 closed=0' <<<"${OUT}"
+
+      - name: Reject private or ambiguous decision fields
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/bad.json" <<'JSON'
+          {
+            "schema_version": 1,
+            "decisions_version": "0.1.0",
+            "items": [
+              {
+                "package_id": "0123456789abcdefabcd",
+                "revision_key": "0123456789abcdefabcd",
+                "state": "analyzed",
+                "filename": "FORBIDDEN_PRIVATE_NAME.mp4"
+              }
+            ]
+          }
+          JSON
+          set +e
+          OUT="$(python3 src/curation_decision_apply.py \
+            --root-dir "${TL_ROOT}" \
+            --decisions "${RUNNER_TEMP}/bad.json")"
+          RC=$?
+          set -e
+          echo "${OUT}"
+          test "${RC}" -eq 2
+          grep -q 'curation_decision_apply_error code=decision_fields' <<<"${OUT}"
+          ! grep -R -q 'FORBIDDEN_PRIVATE_NAME' "${TL_ROOT}"
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

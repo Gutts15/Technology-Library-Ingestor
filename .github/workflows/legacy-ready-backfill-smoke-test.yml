@@ -1,0 +1,173 @@
+name: Legacy READY backfill smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/legacy_ready_backfill.py"
+      - "src/package_contracts.py"
+      - ".github/workflows/legacy-ready-backfill-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-legacy-ready-backfill-test
+  cancel-in-progress: false
+
+jobs:
+  legacy-backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build synthetic legacy READY packages
+        run: |
+          set -euo pipefail
+          ROOT="tmp/99_INBOX/READY_FOR_ANALYSIS"
+          mkdir -p "$ROOT" tmp/99_INBOX/PROCESS_LOG/RECORDS
+
+          for pkg in \
+            aaaaaaaaaaaaaaaaaaaa \
+            bbbbbbbbbbbbbbbbbbbb \
+            cccccccccccccccccccc \
+            dddddddddddddddddddd
+          do
+            mkdir -p "$ROOT/$pkg"
+            printf '{"schema_version":1}\n' > "$ROOT/$pkg/checkpoint.json"
+          done
+
+          cat > "$ROOT/aaaaaaaaaaaaaaaaaaaa/ingest.json" <<'EOF'
+          {
+            "schema_version": 1,
+            "source": {"provider":"test","file_id":"id-a","name":"PRIVATE_CURRENT_CANARY.mp4","media_type":"video/mp4"},
+            "processing": {"status":"processed","pipeline_version":"0.5.0","processed_at":"2026-09-01T00:00:00+00:00"},
+            "artifacts": {"timeline":"timeline.md"},
+            "media": {"duration_seconds":10}
+          }
+          EOF
+          printf '{"schema_version":1,"compactor_version":"0.6.2"}\n' > "$ROOT/aaaaaaaaaaaaaaaaaaaa/evidence-summary.json"
+          cat > "$ROOT/aaaaaaaaaaaaaaaaaaaa/process-record.json" <<'EOF'
+          {
+            "schema_version":1,
+            "record_version":"0.1.0",
+            "package_id":"aaaaaaaaaaaaaaaaaaaa",
+            "source":{"source_folder":"99_INBOX/TO_REVIEW/VIDEOS"},
+            "processing":{"status":"processed","pipeline_version":"0.5.0","compactor_version":"0.6.2"}
+          }
+          EOF
+
+          cat > "$ROOT/bbbbbbbbbbbbbbbbbbbb/ingest.json" <<'EOF'
+          {
+            "schema_version": 1,
+            "source": {"provider":"test","file_id":"id-b","name":"PRIVATE_MISSING_RECORD_CANARY.mp4","media_type":"video/mp4"},
+            "processing": {"status":"processed","pipeline_version":"0.5.0","processed_at":"2026-09-02T00:00:00+00:00"},
+            "artifacts": {"timeline":"timeline.md"},
+            "media": {"duration_seconds":20}
+          }
+          EOF
+          printf '{"schema_version":1,"compactor_version":"0.6.2"}\n' > "$ROOT/bbbbbbbbbbbbbbbbbbbb/evidence-summary.json"
+
+          cat > "$ROOT/cccccccccccccccccccc/ingest.json" <<'EOF'
+          {
+            "schema_version": 1,
+            "source": {"provider":"test","file_id":"id-c","name":"PRIVATE_OLD_RECORD_CANARY.mp4","media_type":"video/mp4"},
+            "processing": {"status":"processed","pipeline_version":"0.4.0","processed_at":"2026-09-03T00:00:00+00:00"},
+            "artifacts": {"timeline":"timeline.md"},
+            "media": {"duration_seconds":30}
+          }
+          EOF
+          printf '{"schema_version":1,"compactor_version":"0.6.1"}\n' > "$ROOT/cccccccccccccccccccc/evidence-summary.json"
+          printf '{"schema_version":0,"legacy":true,"secret":"PRIVATE_OLD_RECORD_CONTENT"}\n' > "$ROOT/cccccccccccccccccccc/process-record.json"
+
+          cat > "$ROOT/dddddddddddddddddddd/ingest.json" <<'EOF'
+          {
+            "schema_version": 1,
+            "source": {"provider":"test","file_id":"id-d","name":"PRIVATE_INCOMPLETE_CANARY.mp4","media_type":"video/mp4"},
+            "processing": {"status":"processed","pipeline_version":"0.3.0"},
+            "artifacts": {"timeline":"timeline.md"},
+            "media": {"duration_seconds":40}
+          }
+          EOF
+
+      - name: Audit without modifying packages
+        run: |
+          set -euo pipefail
+          python3 src/legacy_ready_backfill.py \
+            --root-dir tmp/99_INBOX/READY_FOR_ANALYSIS \
+            > tmp/dry.log
+          grep -q 'mode=dry_run updated=0 seen=4 current=1 backfillable=2 blocked=1' tmp/dry.log
+          grep -q 'kinds=video:3' tmp/dry.log
+          test ! -f tmp/99_INBOX/READY_FOR_ANALYSIS/bbbbbbbbbbbbbbbbbbbb/process-record.json
+
+      - name: Apply metadata-only backfill
+        run: |
+          set -euo pipefail
+          python3 src/legacy_ready_backfill.py \
+            --root-dir tmp/99_INBOX/READY_FOR_ANALYSIS \
+            --apply \
+            > tmp/apply.log
+          grep -q 'mode=apply updated=2 seen=4 current=1 backfillable=2 blocked=1' tmp/apply.log
+
+      - name: Validate migrated metadata and preservation
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('tmp/99_INBOX/READY_FOR_ANALYSIS')
+          for pkg in ('bbbbbbbbbbbbbbbbbbbb', 'cccccccccccccccccccc'):
+              record = json.loads((root / pkg / 'process-record.json').read_text())
+              assert record['schema_version'] == 1
+              assert record['package_id'] == pkg
+              assert record['source']['source_folder'] == '99_INBOX/TO_REVIEW/VIDEOS'
+              assert record['processing']['status'] == 'processed'
+              assert record['migration']['type'] == 'legacy_ready_metadata_backfill'
+              assert record['migration']['media_reprocessed'] is False
+              central = json.loads((Path('tmp/99_INBOX/PROCESS_LOG/RECORDS') / f'{pkg}.json').read_text())
+              assert central == record
+
+          old = Path('tmp/99_INBOX/PROCESS_LOG/LEGACY_BACKFILL/cccccccccccccccccccc-process-record.json')
+          assert old.is_file()
+          assert 'PRIVATE_OLD_RECORD_CONTENT' in old.read_text()
+          assert not Path('tmp/99_INBOX/PROCESS_LOG/LEGACY_BACKFILL/bbbbbbbbbbbbbbbbbbbb-process-record.json').exists()
+          assert not (root / 'dddddddddddddddddddd' / 'process-record.json').exists()
+          PY
+
+      - name: Confirm idempotent second audit
+        run: |
+          python3 src/legacy_ready_backfill.py \
+            --root-dir tmp/99_INBOX/READY_FOR_ANALYSIS \
+            > tmp/second.log
+          grep -q 'mode=dry_run updated=0 seen=4 current=3 backfillable=0 blocked=1' tmp/second.log
+
+      - name: Validate privacy-safe logs
+        run: |
+          cat tmp/dry.log tmp/apply.log tmp/second.log > tmp/all.log
+          for forbidden in \
+            PRIVATE_CURRENT_CANARY \
+            PRIVATE_MISSING_RECORD_CANARY \
+            PRIVATE_OLD_RECORD_CANARY \
+            PRIVATE_INCOMPLETE_CANARY \
+            PRIVATE_OLD_RECORD_CONTENT \
+            aaaaaaaaaaaaaaaaaaaa \
+            bbbbbbbbbbbbbbbbbbbb \
+            cccccccccccccccccccc \
+            dddddddddddddddddddd
+          do
+            ! grep -q "$forbidden" tmp/all.log
+          done
+          echo "legacy_ready_backfill_privacy_ok"
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

@@ -1,0 +1,14 @@
+name: One-time curation main validation
+
+on:
+  push:
+    paths:
+      - ".github/workflows/one-time-curation-main-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-main-ingest:
+    uses: Gutts15/Technology-Library-Ingestor/.github/workflows/drive-ingest.yml@3ad315ee7fed08c53245197113dbc81fc21979c8
+    secrets: inherit

@@ -1,0 +1,202 @@
+name: Candidate curation smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/candidate_curation_prepare.py"
+      - "src/candidate_claim_review.py"
+      - "src/candidate_editorial_gate.py"
+      - "src/candidate_record_template.py"
+      - "src/candidate_canonical_draft.py"
+      - "src/candidate_publish_prepare.py"
+      - "src/candidate_publish_index.py"
+      - "src/candidate_publish_validate.py"
+      - "src/candidate_batch_inspect.py"
+      - "src/candidate_batch_editorial_acceptance.py"
+      - "src/candidate_hold_inspect.py"
+      - "src/candidate_retrieval_preflight.py"
+      - "src/candidate_retrieval_routing_local.py"
+      - "src/candidate_remote_coordination_policy.py"
+      - "src/candidate_git_ref_coordination_fixture.py"
+      - "src/candidate_git_ref_remote_probe.py"
+      - "src/candidate_git_ref_capability_descriptor.py"
+      - "src/candidate_remote_recovery_probe.py"
+      - "src/candidate_remote_recovery_capability_descriptor.py"
+      - "src/candidate_remote_recovery_policy.py"
+      - "src/candidate_executor_remote_wiring_fixture.py"
+      - "src/candidate_executor_remote_recovery_fixture.py"
+      - "src/candidate_executor_readiness.py"
+      - "src/candidate_publish_authorization.py"
+      - "src/candidate_transaction_publish.py"
+      - "src/candidate_production_coordinator.py"
+      - "src/candidate_transaction_prewrite_arm.py"
+      - "src/candidate_canonical_record_mutation.py"
+      - "src/candidate_canonical_record_mutation_remote_fixture.py"
+      - "src/candidate_canonical_index_rebuild.py"
+      - "src/candidate_canonical_transaction_engine.py"
+      - "src/candidate_canonical_transaction_remote_fixture.py"
+      - "src/candidate_transaction_commit_engine.py"
+      - "src/candidate_transaction_commit_remote_fixture.py"
+      - "src/candidate_production_recovery_engine.py"
+      - "src/candidate_production_recover.py"
+      - "src/candidate_production_restart_recovery_fixture.py"
+      - "src/candidate_stage_11g_validation.py"
+      - "src/candidate_stage_12a_preflight.py"
+      - "src/candidate_controlled_publish.py"
+      - "src/candidate_stage_13_verification.py"
+      - "src/candidate_stage_14_verification.py"
+      - "src/candidate_stage_15_settlement.py"
+      - "src/candidate_update_plan.py"
+      - "src/candidate_update_render.py"
+      - "src/candidate_update_ready.py"
+      - "src/candidate_finalize_batch.py"
+      - "src/candidate_transaction_plan.py"
+      - "src/candidate_transaction_prepare.py"
+      - "src/candidate_transaction_fixture.py"
+      - "src/candidate_transaction_recovery_fixture.py"
+      - "src/candidate_transaction_lease_fixture.py"
+      - "src/candidate_transaction_orchestrator_fixture.py"
+      - "src/candidate_transaction_receipt.py"
+      - "src/candidate_settlement_plan.py"
+      - "src/candidate_settlement_fixture.py"
+      - "src/candidate_finalize_local.py"
+      - "src/candidate_local_cycle.py"
+      - "src/candidate_semantic_local.py"
+      - "src/candidate_semantic_contract.py"
+      - "src/library_publish.py"
+      - "src/library_index_build.py"
+      - "tests/retrieval_regression_cases.json"
+      - "tests/test_retrieval_regression_cases.py"
+      - "tests/test_candidate_pipeline.py"
+      - "tests/test_candidate_editorial_gate.py"
+      - "tests/test_candidate_record_template.py"
+      - "tests/test_candidate_finalize_helpers.py"
+      - "tests/test_candidate_batch_inspect.py"
+      - "tests/test_candidate_batch_editorial_acceptance.py"
+      - "tests/test_candidate_hold_inspect.py"
+      - "tests/test_candidate_retrieval_preflight.py"
+      - "tests/test_candidate_retrieval_routing_local.py"
+      - "tests/test_candidate_remote_coordination_policy.py"
+      - "tests/test_candidate_git_ref_coordination_fixture.py"
+      - "tests/test_candidate_git_ref_remote_probe.py"
+      - "tests/test_candidate_git_ref_capability_descriptor.py"
+      - "tests/test_candidate_remote_recovery_probe.py"
+      - "tests/test_candidate_remote_recovery_capability_descriptor.py"
+      - "tests/test_candidate_remote_recovery_policy.py"
+      - "tests/test_candidate_executor_remote_wiring_fixture.py"
+      - "tests/test_candidate_executor_remote_recovery_fixture.py"
+      - "tests/test_candidate_executor_readiness.py"
+      - "tests/test_candidate_transaction_publish.py"
+      - "tests/test_candidate_production_coordinator.py"
+      - "tests/test_candidate_transaction_prewrite_arm.py"
+      - "tests/test_candidate_canonical_record_mutation.py"
+      - "tests/test_candidate_canonical_record_mutation_remote_fixture.py"
+      - "tests/test_candidate_canonical_index_rebuild.py"
+      - "tests/test_candidate_canonical_transaction_engine.py"
+      - "tests/test_candidate_canonical_transaction_remote_fixture.py"
+      - "tests/test_candidate_production_coordinator_commit.py"
+      - "tests/test_candidate_transaction_commit_engine.py"
+      - "tests/test_candidate_transaction_commit_remote_fixture.py"
+      - "tests/test_candidate_production_recovery_engine.py"
+      - "tests/test_candidate_production_recover.py"
+      - "tests/test_candidate_production_restart_recovery_fixture.py"
+      - "tests/test_candidate_stage_12a_preflight.py"
+      - "tests/test_candidate_controlled_publish.py"
+      - "tests/test_candidate_stage_13_verification.py"
+      - "tests/test_candidate_stage_14_verification.py"
+      - "tests/test_candidate_stage_15_settlement.py"
+      - "tests/test_candidate_update_plan.py"
+      - "tests/test_candidate_update_render.py"
+      - "tests/test_candidate_update_ready.py"
+      - "tests/test_candidate_finalize_batch.py"
+      - "tests/test_candidate_transaction_plan.py"
+      - "tests/test_candidate_transaction_prepare.py"
+      - "tests/test_candidate_transaction_fixture.py"
+      - "tests/test_candidate_transaction_recovery_fixture.py"
+      - "tests/test_candidate_transaction_lease_fixture.py"
+      - "tests/test_candidate_transaction_orchestrator_fixture.py"
+      - "tests/test_candidate_transaction_receipt.py"
+      - "tests/test_candidate_settlement_plan.py"
+      - "tests/test_candidate_settlement_fixture.py"
+      - ".github/workflows/candidate-curation-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-candidate-curation-smoke
+  cancel-in-progress: true
+
+jobs:
+  candidate-curation-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Enforce zero-additional-cost guardrail
+        run: python3 src/cost_guardrail.py
+
+      - name: Validate candidate semantic-to-settlement boundary
+        run: |
+          python3 tests/test_candidate_pipeline.py
+          python3 tests/test_candidate_editorial_gate.py
+          python3 tests/test_candidate_record_template.py
+          python3 tests/test_candidate_finalize_helpers.py
+          python3 tests/test_candidate_batch_inspect.py
+          python3 tests/test_candidate_batch_editorial_acceptance.py
+          python3 tests/test_candidate_hold_inspect.py
+          python3 tests/test_candidate_retrieval_preflight.py
+          python3 tests/test_candidate_retrieval_routing_local.py
+          python3 tests/test_candidate_remote_coordination_policy.py
+          python3 tests/test_candidate_git_ref_coordination_fixture.py
+          python3 tests/test_candidate_git_ref_remote_probe.py
+          python3 tests/test_candidate_git_ref_capability_descriptor.py
+          python3 tests/test_candidate_remote_recovery_probe.py
+          python3 tests/test_candidate_remote_recovery_capability_descriptor.py
+          python3 tests/test_candidate_remote_recovery_policy.py
+          python3 tests/test_candidate_executor_remote_wiring_fixture.py
+          python3 tests/test_candidate_executor_remote_recovery_fixture.py
+          python3 tests/test_candidate_executor_readiness.py
+          python3 tests/test_candidate_transaction_publish.py
+          python3 tests/test_candidate_production_coordinator.py
+          python3 tests/test_candidate_transaction_prewrite_arm.py
+          python3 tests/test_candidate_canonical_record_mutation.py
+          python3 tests/test_candidate_canonical_record_mutation_remote_fixture.py
+          python3 tests/test_candidate_canonical_index_rebuild.py
+          python3 tests/test_candidate_canonical_transaction_engine.py
+          python3 tests/test_candidate_canonical_transaction_remote_fixture.py
+          python3 tests/test_candidate_production_coordinator_commit.py
+          python3 tests/test_candidate_transaction_commit_engine.py
+          python3 tests/test_candidate_transaction_commit_remote_fixture.py
+          python3 tests/test_candidate_production_recovery_engine.py
+          python3 tests/test_candidate_production_recover.py
+          python3 tests/test_candidate_production_restart_recovery_fixture.py
+          python3 tests/test_candidate_stage_12a_preflight.py
+          python3 tests/test_candidate_controlled_publish.py
+          python3 tests/test_candidate_stage_13_verification.py
+          python3 tests/test_candidate_stage_14_verification.py
+          python3 tests/test_candidate_stage_15_settlement.py
+          python3 tests/test_candidate_update_plan.py
+          python3 tests/test_candidate_update_render.py
+          python3 tests/test_candidate_update_ready.py
+          python3 tests/test_candidate_finalize_batch.py
+          python3 tests/test_candidate_transaction_plan.py
+          python3 tests/test_candidate_transaction_prepare.py
+          python3 tests/test_candidate_transaction_fixture.py
+          python3 tests/test_candidate_transaction_recovery_fixture.py
+          python3 tests/test_candidate_transaction_lease_fixture.py
+          python3 tests/test_candidate_transaction_orchestrator_fixture.py
+          python3 tests/test_candidate_transaction_receipt.py
+          python3 tests/test_candidate_settlement_plan.py
+          python3 tests/test_candidate_settlement_fixture.py
+          python3 tests/test_retrieval_regression_cases.py
+
+      - name: Verify clean workspace
+        run: test -z "$(git status --porcelain)"

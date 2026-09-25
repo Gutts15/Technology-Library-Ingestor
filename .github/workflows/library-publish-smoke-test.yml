@@ -1,0 +1,174 @@
+name: Library publish smoke test
+
+on:
+  push:
+    paths:
+      - "src/library_publish.py"
+      - ".github/workflows/library-publish-smoke-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build valid fixture
+        run: |
+          set -euo pipefail
+          ROOT="${RUNNER_TEMP}/storage"
+          OUTBOX="${ROOT}/99_INBOX/CURATION/PUBLISH_READY/records"
+          mkdir -p "${OUTBOX}"
+          RECORD_ID="0123456789abcdefabcd"
+          cat > "${OUTBOX}/${RECORD_ID}.md" <<'MD'
+          RECORD_ID: 0123456789abcdefabcd
+          TYPE: TECHNOLOGY
+          STATUS: TEST
+          DOMAIN: 04_AI_AGENTS
+          CATEGORY: WORKFLOWS
+          TITLE: Example Tool
+
+          # Example Tool
+
+          Safe fixture content.
+          MD
+          SHA="$(sha256sum "${OUTBOX}/${RECORD_ID}.md" | awk '{print $1}')"
+          mkdir -p "${ROOT}/99_INBOX/CURATION/PUBLISH_READY"
+          cat > "${ROOT}/99_INBOX/CURATION/PUBLISH_READY/latest.json" <<JSON
+          {
+            "schema_version": 1,
+            "publish_version": "0.2.0",
+            "items": [
+              {
+                "package_id": "aaaaaaaaaaaaaaaaaaaa",
+                "revision_key": "bbbbbbbbbbbbbbbbbbbb",
+                "record_id": "${RECORD_ID}",
+                "record_type": "TECHNOLOGY",
+                "status": "TEST",
+                "domain": "04_AI_AGENTS",
+                "category": "WORKFLOWS",
+                "slug": "example-tool",
+                "title": "Example Tool",
+                "content_path": "99_INBOX/CURATION/PUBLISH_READY/records/${RECORD_ID}.md",
+                "content_sha256": "${SHA}"
+              }
+            ]
+          }
+          JSON
+          echo "TL_ROOT=${ROOT}" >> "${GITHUB_ENV}"
+
+      - name: Dry run is non-mutating
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/library_publish.py --root-dir "${TL_ROOT}")"
+          echo "${OUT}"
+          grep -q 'library_publish_ok mode=dry_run items=1 planned=1 updated=0 unchanged=0 receipt=0' <<<"${OUT}"
+          test ! -e "${TL_ROOT}/00_LIBRARY/04_AI_AGENTS/WORKFLOWS/technology-example-tool.md"
+          test ! -e "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE/latest.json"
+
+      - name: Apply and verify target plus receipt
+        run: |
+          set -euo pipefail
+          OUT="$(python3 src/library_publish.py --root-dir "${TL_ROOT}" --apply)"
+          echo "${OUT}"
+          grep -q 'library_publish_ok mode=apply items=1 planned=1 updated=1 unchanged=0 receipt=1' <<<"${OUT}"
+          TARGET="${TL_ROOT}/00_LIBRARY/04_AI_AGENTS/WORKFLOWS/technology-example-tool.md"
+          RECEIPT="${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE/latest.json"
+          test -f "${TARGET}"
+          test -f "${RECEIPT}"
+          grep -q '^RECORD_ID: 0123456789abcdefabcd$' "${TARGET}"
+          grep -q '^TITLE: Example Tool$' "${TARGET}"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          data = json.loads((root/'99_INBOX/CURATION/PUBLISH_STATE/latest.json').read_text())
+          assert data['publish_version'] == '0.2.0'
+          assert data['items'][0]['package_id'] == 'aaaaaaaaaaaaaaaaaaaa'
+          assert data['items'][0]['revision_key'] == 'bbbbbbbbbbbbbbbbbbbb'
+          assert data['items'][0]['record_id'] == '0123456789abcdefabcd'
+          PY
+
+      - name: Reapply is idempotent and refreshes deterministic receipt
+        run: |
+          set -euo pipefail
+          BEFORE="$(sha256sum "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE/latest.json" | awk '{print $1}')"
+          OUT="$(python3 src/library_publish.py --root-dir "${TL_ROOT}" --apply)"
+          echo "${OUT}"
+          grep -q 'library_publish_ok mode=apply items=1 planned=0 updated=0 unchanged=1 receipt=1' <<<"${OUT}"
+          AFTER="$(sha256sum "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE/latest.json" | awk '{print $1}')"
+          test "${BEFORE}" = "${AFTER}"
+
+      - name: Reject content hash mismatch without replacing receipt
+        run: |
+          set -euo pipefail
+          RECEIPT_SHA="$(sha256sum "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE/latest.json" | awk '{print $1}')"
+          printf '\nchanged\n' >> "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_READY/records/0123456789abcdefabcd.md"
+          set +e
+          OUT="$(python3 src/library_publish.py --root-dir "${TL_ROOT}" --apply)"
+          RC=$?
+          set -e
+          echo "${OUT}"
+          test "${RC}" -eq 2
+          grep -q 'library_publish_error code=content_sha256 record_id=0123456789abcdefabcd' <<<"${OUT}"
+          test "${RECEIPT_SHA}" = "$(sha256sum "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_STATE/latest.json" | awk '{print $1}')"
+
+      - name: Reject path traversal
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          p = root/'99_INBOX/CURATION/PUBLISH_READY/latest.json'
+          data = json.loads(p.read_text())
+          data['items'][0]['content_path'] = '99_INBOX/CURATION/PUBLISH_READY/records/../secret.md'
+          p.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          set +e
+          OUT="$(python3 src/library_publish.py --root-dir "${TL_ROOT}" --apply)"
+          RC=$?
+          set -e
+          echo "${OUT}"
+          test "${RC}" -eq 2
+          grep -q 'library_publish_error code=path_traversal' <<<"${OUT}"
+
+      - name: Reject missing package binding
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['TL_ROOT'])
+          p = root/'99_INBOX/CURATION/PUBLISH_READY/latest.json'
+          data = json.loads(p.read_text())
+          data['items'][0].pop('package_id', None)
+          data['items'][0]['content_path'] = '99_INBOX/CURATION/PUBLISH_READY/records/0123456789abcdefabcd.md'
+          p.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+          set +e
+          OUT="$(python3 src/library_publish.py --root-dir "${TL_ROOT}" --apply)"
+          RC=$?
+          set -e
+          echo "${OUT}"
+          test "${RC}" -eq 2
+          grep -q 'library_publish_error code=record_fields' <<<"${OUT}"
+
+      - name: Missing manifest is a safe skip
+        run: |
+          set -euo pipefail
+          mv "${TL_ROOT}/99_INBOX/CURATION/PUBLISH_READY/latest.json" "${TL_ROOT}/manifest.saved"
+          OUT="$(python3 src/library_publish.py --root-dir "${TL_ROOT}")"
+          echo "${OUT}"
+          grep -q 'library_publish_skip reason=manifest_missing' <<<"${OUT}"
+
+      - name: Verify clean repository workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

@@ -1,0 +1,54 @@
+name: Real standby readiness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-real-standby-readiness
+  cancel-in-progress: false
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Configure standby storage only
+        env:
+          TL_RCLONE_BACKUP_CONFIG: ${{ secrets.TL_RCLONE_BACKUP_CONFIG }}
+        run: |
+          set -euo pipefail
+          test -n "${TL_RCLONE_BACKUP_CONFIG:-}"
+          CONFIG_FILE="${RUNNER_TEMP}/tl-standby-rclone.conf"
+          umask 077
+          printf '%s' "${TL_RCLONE_BACKUP_CONFIG}" > "${CONFIG_FILE}"
+          echo "RCLONE_CONFIG=${CONFIG_FILE}" >> "${GITHUB_ENV}"
+
+      - name: Validate real standby read-only readiness
+        run: |
+          set -euo pipefail
+          python3 src/standby_readiness.py \
+            --remote "tl_backup:" \
+            --max-backup-age-hours 24 \
+            --require-unlocked
+
+      - name: Remove temporary storage configuration
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/tl-standby-rclone.conf"
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"

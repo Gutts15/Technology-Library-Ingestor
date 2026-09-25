@@ -1,0 +1,228 @@
+name: Storage reconcile smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/storage_reconcile.py"
+      - "src/storage_failover.py"
+      - "src/storage_replica.py"
+      - "src/storage_preflight.py"
+      - ".github/workflows/storage-reconcile-smoke-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-storage-reconcile-test
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RCLONE_CONFIG_PRIMARY_TYPE: local
+      RCLONE_CONFIG_BACKUP_TYPE: local
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Create divergent synthetic primary and active standby
+        run: |
+          set -euo pipefail
+          PRIMARY="tmp/primary"
+          BACKUP="tmp/backup"
+
+          for root in "${PRIMARY}" "${BACKUP}"; do
+            mkdir -p \
+              "${root}/00_LIBRARY" \
+              "${root}/99_INBOX/DROP_HERE" \
+              "${root}/99_INBOX/TO_REVIEW/VIDEOS" \
+              "${root}/99_INBOX/READY_FOR_ANALYSIS/pkg" \
+              "${root}/99_INBOX/PROCESS_LOG/STORAGE" \
+              "${root}/99_INBOX/PROCESS_LOG/RECORDS" \
+              "${root}/99_INBOX/CURATION" \
+              "${root}/99_INBOX/ERROR"
+          done
+
+          printf 'PRIMARY_STALE_CANARY\n' > "${PRIMARY}/00_LIBRARY/state.txt"
+          printf 'PRIMARY_ONLY_CANARY\n' > "${PRIMARY}/00_LIBRARY/primary-only.txt"
+          printf '{"old":true}\n' > "${PRIMARY}/99_INBOX/PROCESS_LOG/RECORDS/item.json"
+
+          printf 'BACKUP_AUTHORITATIVE_CANARY_WITH_DIFFERENT_SIZE\n' > "${BACKUP}/00_LIBRARY/state.txt"
+          printf 'BACKUP_NEW_UPLOAD_CANARY\n' > "${BACKUP}/99_INBOX/DROP_HERE/new-upload.txt"
+          printf 'BACKUP_PENDING_CANARY\n' > "${BACKUP}/99_INBOX/TO_REVIEW/VIDEOS/pending.txt"
+          printf '{"ready":true}\n' > "${BACKUP}/99_INBOX/READY_FOR_ANALYSIS/pkg/evidence-summary.json"
+          printf '{"new":true,"source":"standby"}\n' > "${BACKUP}/99_INBOX/PROCESS_LOG/RECORDS/item.json"
+          printf '{"curation":"standby"}\n' > "${BACKUP}/99_INBOX/CURATION/state.json"
+          printf 'BACKUP_ERROR_CANARY\n' > "${BACKUP}/99_INBOX/ERROR/error.txt"
+
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          root = Path('tmp/backup/99_INBOX/PROCESS_LOG/STORAGE')
+          root.joinpath('replication-state.json').write_text(json.dumps({
+              'schema_version': 1,
+              'replica_version': '0.1.1',
+              'complete': True,
+              'phase': 'post',
+              'completed_at': datetime.now(timezone.utc).isoformat(),
+              'source_role': 'primary',
+              'destination_role': 'standby',
+              'source_provider': 'primary',
+              'destination_provider': 'backup',
+              'scope_count': 7,
+              'scope_policy': 'critical_state_v1',
+          }) + '\n', encoding='utf-8')
+          root.joinpath('failover-active.json').write_text(json.dumps({
+              'schema_version': 1,
+              'selector_version': '0.1.1',
+              'active': True,
+              'activated_at': datetime.now(timezone.utc).isoformat(),
+              'reason': 'primary_unavailable',
+          }) + '\n', encoding='utf-8')
+          PY
+
+      - name: Reconcile authoritative standby into recovered primary
+        run: |
+          set -euo pipefail
+          python3 src/storage_reconcile.py \
+            --primary "primary:$(pwd)/tmp/primary" \
+            --backup "backup:$(pwd)/tmp/backup" \
+            --primary-provider primary \
+            --backup-provider backup \
+            --auto \
+            > tmp/reconcile.log 2>&1
+          grep -q "storage_reconcile_ok version=0.1.0 scopes=7 deep=2 quarantine=1" tmp/reconcile.log
+
+      - name: Validate reconciled state and quarantine
+        run: |
+          set -euo pipefail
+          PRIMARY="tmp/primary"
+          BACKUP="tmp/backup"
+
+          cmp "${PRIMARY}/00_LIBRARY/state.txt" "${BACKUP}/00_LIBRARY/state.txt"
+          test -f "${PRIMARY}/99_INBOX/DROP_HERE/new-upload.txt"
+          test -f "${PRIMARY}/99_INBOX/TO_REVIEW/VIDEOS/pending.txt"
+          test -f "${PRIMARY}/99_INBOX/READY_FOR_ANALYSIS/pkg/evidence-summary.json"
+          cmp "${PRIMARY}/99_INBOX/PROCESS_LOG/RECORDS/item.json" "${BACKUP}/99_INBOX/PROCESS_LOG/RECORDS/item.json"
+          cmp "${PRIMARY}/99_INBOX/CURATION/state.json" "${BACKUP}/99_INBOX/CURATION/state.json"
+          test -f "${PRIMARY}/99_INBOX/ERROR/error.txt"
+
+          test ! -f "${PRIMARY}/00_LIBRARY/primary-only.txt"
+          test -n "$(find "${PRIMARY}/99_INBOX/FAILBACK_QUARANTINE" -type f -name 'primary-only.txt' -print -quit)"
+          test -n "$(find "${PRIMARY}/99_INBOX/FAILBACK_QUARANTINE" -type f -name 'state.txt' -print -quit)"
+
+          test ! -f "${PRIMARY}/99_INBOX/PROCESS_LOG/STORAGE/failover-active.json"
+          test ! -f "${BACKUP}/99_INBOX/PROCESS_LOG/STORAGE/failover-active.json"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for base in (Path('tmp/primary'), Path('tmp/backup')):
+              reconcile = json.loads((base / '99_INBOX/PROCESS_LOG/STORAGE/reconciliation-state.json').read_text())
+              assert reconcile['status'] == 'complete'
+              assert reconcile['scope_count'] == 7
+              assert reconcile['quarantine_policy'] == 'preserve_displaced_primary_v1'
+              marker = json.loads((base / '99_INBOX/PROCESS_LOG/STORAGE/replication-state.json').read_text())
+              assert marker['complete'] is True
+              assert marker['phase'] == 'post'
+              assert marker['scope_policy'] == 'critical_state_v1'
+              assert marker['scope_count'] == 7
+          PY
+
+      - name: Confirm post-reconcile critical scopes are equal
+        run: |
+          set -euo pipefail
+          for scope in \
+            "00_LIBRARY" \
+            "99_INBOX/DROP_HERE" \
+            "99_INBOX/TO_REVIEW" \
+            "99_INBOX/READY_FOR_ANALYSIS" \
+            "99_INBOX/PROCESS_LOG" \
+            "99_INBOX/CURATION" \
+            "99_INBOX/ERROR"
+          do
+            rclone check \
+              "backup:$(pwd)/tmp/backup/${scope}" \
+              "primary:$(pwd)/tmp/primary/${scope}" \
+              --size-only --log-level ERROR --stats 0 \
+              > /dev/null 2>&1
+          done
+
+      - name: Confirm idempotent auto mode after failback
+        run: |
+          python3 src/storage_reconcile.py \
+            --primary "primary:$(pwd)/tmp/primary" \
+            --backup "backup:$(pwd)/tmp/backup" \
+            --auto \
+            > tmp/reconcile-second.log 2>&1
+          grep -q "storage_reconcile_skip code=no_active_failover" tmp/reconcile-second.log
+
+      - name: Keep active standby locked while primary remains unavailable
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/backup-offline/STATE tmp/backup-offline/META
+          printf 'OFFLINE_BACKUP_CANARY\n' > tmp/backup-offline/STATE/value.txt
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          Path('tmp/backup-offline/META/failover-active.json').write_text(json.dumps({
+              'schema_version': 1,
+              'active': True,
+              'activated_at': datetime.now(timezone.utc).isoformat(),
+          }) + '\n', encoding='utf-8')
+          PY
+          python3 src/storage_reconcile.py \
+            --primary "primary:$(pwd)/tmp/missing-primary" \
+            --backup "backup:$(pwd)/tmp/backup-offline" \
+            --scope STATE \
+            --failover-lock META/failover-active.json \
+            --reconcile-state META/reconciliation-state.json \
+            --replication-state META/replication-state.json \
+            --quarantine-root QUARANTINE \
+            --skip-replication-marker \
+            --auto \
+            > tmp/offline.log 2>&1
+          grep -q "storage_reconcile_skip code=primary_" tmp/offline.log
+          test -f tmp/backup-offline/META/failover-active.json
+          test ! -f tmp/backup-offline/META/reconciliation-state.json
+
+      - name: Validate sanitized reconciliation logs
+        run: |
+          cat tmp/reconcile.log tmp/reconcile-second.log tmp/offline.log > tmp/all.log
+          for forbidden in \
+            PRIMARY_STALE_CANARY \
+            PRIMARY_ONLY_CANARY \
+            BACKUP_AUTHORITATIVE_CANARY_WITH_DIFFERENT_SIZE \
+            BACKUP_NEW_UPLOAD_CANARY \
+            BACKUP_PENDING_CANARY \
+            BACKUP_ERROR_CANARY \
+            OFFLINE_BACKUP_CANARY \
+            primary-only.txt \
+            new-upload.txt \
+            pending.txt \
+            error.txt
+          do
+            ! grep -q "$forbidden" tmp/all.log
+          done
+          echo "storage_reconcile_privacy_ok"
+
+      - name: Remove generated data
+        if: always()
+        run: rm -rf tmp storage-reconcile-state.json replication-state.json
+
+      - name: Verify clean workspace
+        if: always()
+        run: test -z "$(git status --porcelain)"
