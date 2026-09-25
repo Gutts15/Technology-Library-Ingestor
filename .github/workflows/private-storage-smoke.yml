@@ -37,10 +37,32 @@ jobs:
           set -euo pipefail
           CANARY_NAME="public-runtime-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
           CANARY_REMOTE="tl:99_INBOX/SECURITY_SMOKE/${CANARY_NAME}"
-          trap 'rclone deletefile "${CANARY_REMOTE}" --log-level ERROR >/dev/null 2>&1 || true' EXIT
-          printf 'technology-library-public-runtime-smoke\n' > "${RUNNER_TEMP}/${CANARY_NAME}"
-          rclone copyto "${RUNNER_TEMP}/${CANARY_NAME}" "${CANARY_REMOTE}" --log-level ERROR --stats 0
-          rclone cat "${CANARY_REMOTE}" --log-level ERROR | grep -qx 'technology-library-public-runtime-smoke'
+          CANARY_LOCAL="${RUNNER_TEMP}/${CANARY_NAME}"
+          CANARY_READBACK="${CANARY_LOCAL}.readback"
+          cleanup() {
+            rclone deletefile "${CANARY_REMOTE}" --log-level ERROR >/dev/null 2>&1 || true
+            rm -f "${CANARY_LOCAL}" "${CANARY_READBACK}"
+          }
+          trap cleanup EXIT
+          python3 -c 'import secrets; print(secrets.token_hex(16))' > "${CANARY_LOCAL}"
+          if ! rclone copyto "${CANARY_LOCAL}" "${CANARY_REMOTE}" --log-level ERROR --stats 0 >/dev/null 2>&1; then
+            echo "private_storage_smoke_error code=copy_failed"
+            exit 1
+          fi
+          if ! rclone cat "${CANARY_REMOTE}" --log-level ERROR > "${CANARY_READBACK}" 2>/dev/null; then
+            echo "private_storage_smoke_error code=read_failed"
+            exit 1
+          fi
+          if ! cmp -s "${CANARY_LOCAL}" "${CANARY_READBACK}"; then
+            echo "private_storage_smoke_error code=content_mismatch"
+            exit 1
+          fi
+          if ! rclone deletefile "${CANARY_REMOTE}" --log-level ERROR >/dev/null 2>&1; then
+            echo "private_storage_smoke_error code=cleanup_failed"
+            exit 1
+          fi
+          trap - EXIT
+          rm -f "${CANARY_LOCAL}" "${CANARY_READBACK}"
           echo "private_storage_smoke_ok"
 
       - name: Remove temporary credentials and canary
@@ -48,3 +70,4 @@ jobs:
         run: |
           rm -f "${RUNNER_TEMP}/tl-rclone.conf"
           rm -f "${RUNNER_TEMP}/public-runtime-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          rm -f "${RUNNER_TEMP}/public-runtime-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt.readback"
