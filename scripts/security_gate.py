@@ -157,11 +157,14 @@ def check_workflows(files: list[Path], errors: list[str]) -> None:
         text = text_of(path) or ""
         rel = path.relative_to(ROOT)
         is_keepalive = rel.as_posix() == ".github/workflows/scheduler-keepalive.yml"
+        is_daily_intake = rel.as_posix() == ".github/workflows/zero-touch-intake.yml"
 
         if "permissions:" not in text:
             fail(errors, f"workflow missing explicit permissions: {rel}")
         for forbidden in ("write-all", "contents: write", "actions: write", "id-token: write", "pull_request_target"):
             if forbidden == "contents: write" and is_keepalive:
+                continue
+            if forbidden == "actions: write" and is_daily_intake:
                 continue
             if forbidden in text:
                 fail(errors, f"forbidden workflow capability '{forbidden}': {rel}")
@@ -171,6 +174,15 @@ def check_workflows(files: list[Path], errors: list[str]) -> None:
             if ("secrets." in text or "${{ secrets" in text or
                     re.search(r"(?m)^\s{2}(?:pull_request|workflow_dispatch|push)\s*:", text)):
                 fail(errors, "keepalive must be scheduled only and receive no repository secrets")
+        if is_daily_intake:
+            dispatch = text.split("\n  dispatch_next:\n", 1)
+            if (len(dispatch) != 2 or dispatch[1].count("actions: write") != 1 or
+                    "secrets." in dispatch[1] or "actions/checkout" in dispatch[1] or
+                    "pull_request" in text or "${{ github.token }}" not in dispatch[1] or
+                    "--fixture-only" not in dispatch[0] or
+                    "technology-library-private-storage-ingest" not in dispatch[0] or
+                    not re.search(r"cron: '[0-9]+ [0-9]+ \* \* \*'", dispatch[0])):
+                fail(errors, "daily continuation must use only a token-scoped, secret-free dispatch job")
         if "actions/upload-artifact" in text:
             fail(errors, f"artifact upload is forbidden in V1 workflows: {rel}")
 

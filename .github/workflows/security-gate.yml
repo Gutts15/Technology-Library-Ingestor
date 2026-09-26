@@ -28,7 +28,7 @@ jobs:
         run: python3 scripts/security_gate.py
 
       - name: Test zero-touch intake with synthetic metadata only
-        run: python3 -m unittest tests.test_zero_touch_intake -q
+        run: python3 -m unittest tests.test_zero_touch_intake tests.test_intake_daily_session -q
 
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py

@@ -25,12 +25,13 @@ from rclone_paths import join_remote
 
 INBOX = "99_INBOX/DROP_HERE"
 LEDGER = "99_INBOX/PROCESS_LOG/ZERO_TOUCH_INTAKE"
+SESSION_STATE = f"{LEDGER}/daily_session.json"
 MAX_ITEMS = 5
 MAX_BYTES = 512 * 1024 * 1024
 MAX_ITEM_BYTES = 512 * 1024 * 1024
 MAX_SECONDS = 15 * 60
 LEASE_SECONDS = 20 * 60
-ACCEPTANCE_FIXTURE = re.compile(r"^STAGE20_SYNTHETIC_20260925_[A-Z]\.txt$")
+ACCEPTANCE_FIXTURE = re.compile(r"^STAGE20_SYNTHETIC_20260925_[A-Z]{1,3}\.txt$")
 
 
 class IntakeError(Exception):
@@ -161,16 +162,44 @@ class RcloneStore:
     def mark_baseline_complete(self) -> None:
         self.write_state("baseline_complete", {"completed": [], "lease": None})
 
+    def read_session(self) -> dict[str, Any] | None:
+        self.call("mkdir", self.path(LEDGER))
+        if self.stat(SESSION_STATE) is None:
+            return None
+        try:
+            value = json.loads(self.call("cat", self.path(SESSION_STATE)))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise IntakeError("invalid_private_session") from exc
+        if not isinstance(value, dict) or not isinstance(value.get("targets"), list):
+            raise IntakeError("invalid_private_session")
+        return value
+
+    def write_session(self, value: dict[str, Any]) -> None:
+        self.call("mkdir", self.path(LEDGER))
+        with tempfile.TemporaryDirectory() as directory:
+            local = os.path.join(directory, "session.json")
+            with open(local, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+            self.call("copyto", local, self.path(SESSION_STATE))
+
 
 def process(
     store: RcloneStore, *, baseline: bool = False, fixture_only: bool = False,
-    now: float | None = None,
+    now: float | None = None, eligible: set[tuple[str, str]] | None = None,
+    completed_out: set[tuple[str, str]] | None = None,
+    present_out: set[tuple[str, str]] | None = None,
+    items: list[dict[str, Any]] | None = None,
 ) -> dict[str, int]:
     started = time.monotonic()
     wall_now = time.time() if now is None else now
     stats = {name: 0 for name in ("scanned", "enqueued", "already_done", "baselined", "leased", "deferred", "unsupported", "excluded")}
-    items = store.list_inbox()
+    items = store.list_inbox() if items is None else items
     stats["scanned"] = len(items)
+    if present_out is not None:
+        present_out.update(
+            (key, rev) for item in items
+            if (key := identity(item)) and (rev := revision(item))
+        )
     # Deterministic ordering keeps a large backlog from starving old items.
     items.sort(key=lambda item: (str(item.get("ModTime") or ""), identity(item) or ""))
     total_bytes = 0
@@ -182,6 +211,8 @@ def process(
             stats["excluded"] += 1
             continue
         key, rev, name = identity(item), revision(item), source_name(item)
+        if eligible is not None and (key, rev) not in eligible:
+            continue
         size = item.get("Size")
         if not key or not rev or not name or not isinstance(size, int) or size < 0:
             stats["unsupported"] += 1
@@ -189,6 +220,8 @@ def process(
         state = store.read_state(key)
         if rev in state["completed"]:
             stats["already_done"] += 1
+            if completed_out is not None:
+                completed_out.add((key, rev))
             continue
         if baseline:
             state["completed"].append(rev)
@@ -229,6 +262,8 @@ def process(
             # An expired lease resumes deterministically at the same destination.
             raise
         stats["enqueued"] += 1
+        if completed_out is not None:
+            completed_out.add((key, rev))
         total_bytes += size
     return stats
 
