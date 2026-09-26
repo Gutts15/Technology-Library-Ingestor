@@ -2,11 +2,16 @@ name: Zero-touch private Drive intake
 
 on:
   schedule:
-    - cron: '17,47 * * * *'
+    - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
       baseline_existing:
         description: 'One-time inventory of pre-Stage-20 inbox items without enqueueing them'
+        type: boolean
+        required: false
+        default: false
+      continue_session:
+        description: 'Continue the private daily session (no private state in this input)'
         type: boolean
         required: false
         default: false
@@ -20,9 +25,11 @@ concurrency:
 
 jobs:
   intake:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.TL_STAGE20_ENABLED == 'true')
+    if: github.ref == 'refs/heads/main' && (vars.TL_STAGE20_ENABLED == 'true' || (github.event_name == 'workflow_dispatch' && inputs.baseline_existing == true))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      continue: ${{ steps.worker.outputs.continue }}
     steps:
       - name: Checkout reviewed default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
@@ -51,6 +58,36 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.baseline_existing == true
         run: python3 src/zero_touch_intake.py --baseline-existing
 
-      - name: Bounded automatic poll
-        if: github.event_name == 'schedule' || inputs.baseline_existing != true
-        run: python3 src/zero_touch_intake.py --fixture-only
+      - name: Bounded daily-session worker
+        id: worker
+        if: inputs.baseline_existing != true
+        env:
+          TL_CONTINUE: ${{ inputs.continue_session }}
+        run: |
+          set -euo pipefail
+          if [ "$TL_CONTINUE" = "true" ]; then
+            python3 src/intake_daily_session.py --fixture-only --continue --github-output "$GITHUB_OUTPUT"
+          else
+            python3 src/intake_daily_session.py --fixture-only --github-output "$GITHUB_OUTPUT"
+          fi
+
+  dispatch_next:
+    needs: intake
+    if: github.ref == 'refs/heads/main' && vars.TL_STAGE20_ENABLED == 'true' && needs.intake.outputs.continue == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch exactly one successor with repository token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --output /dev/null \
+            --request POST \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data '{"ref":"main","inputs":{"continue_session":"true"}}' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/zero-touch-intake.yml/dispatches"
