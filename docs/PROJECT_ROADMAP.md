@@ -9,8 +9,11 @@ remains the authority for source media, processing state and canonical records.
 - Stage 19: DONE — the clean-history automation repository is public. The
   publication gate and bounded post-publication private-storage canary passed;
   private Drive content and credentials remain outside the public repository.
-- Stage 20: IN_PROGRESS — one daily zero-touch Drive intake session with
-  bounded, serial workers; synthetic-only 20G acceptance remains pending.
+- Stage 20: DONE — the daily zero-touch intake session passed fixture-only
+  acceptance: scheduled no-op, serial two-worker backlog drain, and the next
+  scheduled post-drain no-op. Real-file intake remains disabled pending a
+  separately reviewed change; checked public logs/artifacts showed no private
+  exposure.
 - Stages 21–26: complete grounded evidence, automatic relevance decisions,
   consolidation, safe canonical promotion, retrieval and bounded operation at
   R$0 mandatory additional recurring cost.
