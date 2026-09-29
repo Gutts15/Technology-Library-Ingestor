@@ -1,4 +1,18 @@
-# Stage 20 — Zero-touch Drive intake (implementation, not acceptance)
+# Stage 20 — Zero-touch Drive intake (fixture-only acceptance complete)
+
+Stage 20G fixture-only acceptance completed on 2026-09-29. Scheduled run
+`36317783882` performed one empty check. Scheduled run `36432380627`
+processed a synthetic eight-item snapshot in a bounded first worker, then
+dispatched exactly one serial successor, run `36433066101`, which drained the
+remaining items and dispatched no further worker. Scheduled run `36571381058`
+performed the next daily empty check with no successor. Private receipts and
+queue readback showed one completed copy per synthetic item, no duplicate and
+no real-item selection. The relevant public jobs produced no artifacts; their
+logs passed the bounded privacy-pattern audit. Deterministic tests cover the
+1–5, 8, 12 and 30 item run counts, frozen snapshot, failure recovery and the
+24-worker/eight-hour exceptional ceiling. These tests do not imply a live
+failure or ceiling event was induced. The deployed workflow remains
+`--fixture-only`; real-file intake is not enabled by this milestone.
 
 The source is only `99_INBOX/DROP_HERE` on the private `tl:` remote. One
 default-branch GitHub Actions schedule starts a session daily at 06:17 UTC.
@@ -67,4 +81,5 @@ fixtures: 0 items => one daily no-op; 1–5 => one worker; 8, 12 and 30 items
 failure recovery; no dispatch after drain; no extra daily polls; and clean
 public logs/artifacts. Stage 20 is not DONE until those checks pass. Oversized
 or unsupported provider objects remain deferred/held and need a future bounded
-policy before universal intake can be claimed.
+policy before universal intake can be claimed. The fixture-only acceptance
+above closes Stage 20, not the overall project or the Charter black-box test.
