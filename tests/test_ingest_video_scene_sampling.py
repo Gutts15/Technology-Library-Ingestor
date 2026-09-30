@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import io
+import json
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -32,6 +36,30 @@ class SceneSamplingTests(unittest.TestCase):
             timestamps = ingest_video.detect_scene_timestamps(Path("synthetic.mp4"), 0.30)
 
         self.assertEqual(timestamps, [1.0, 3.0, 5.0])
+
+    def test_video_without_decodable_frames_records_weak_visual_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "synthetic.mp4"
+            source.write_bytes(b"synthetic test bytes")
+            output = root / "out"
+            probe = {
+                "format": {"duration": "1.0"},
+                "streams": [{"codec_type": "video", "width": 320, "height": 240}],
+            }
+            stats = {"selected_keyframes": 0}
+            argv = ["ingest_video.py", str(source), "--out", str(output)]
+            log = io.StringIO()
+
+            with patch.object(sys, "argv", argv), \
+                 patch.object(ingest_video, "ffprobe", return_value=probe), \
+                 patch.object(ingest_video, "build_keyframes", return_value=([], stats)), \
+                 redirect_stdout(log):
+                self.assertEqual(ingest_video.main(), 0)
+
+            manifest = json.loads((output / "ingest.json").read_text(encoding="utf-8"))
+            self.assertIn("no_decodable_keyframes", manifest["processing"]["warnings"])
+            self.assertNotIn(source.name, log.getvalue())
 
 
 if __name__ == "__main__":

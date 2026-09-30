@@ -523,6 +523,8 @@ def main() -> int:
     )
 
     warnings: list[str] = []
+    if not keyframes:
+        warnings.append("no_decodable_keyframes")
     contact_sheet = build_contact_sheet(args.out, keyframes)
     if keyframes and contact_sheet is None:
         warnings.append("contact_sheet_generation_failed")
