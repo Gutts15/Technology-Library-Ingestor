@@ -113,8 +113,12 @@ def detect_scene_timestamps(path: Path, threshold: float) -> list[float]:
         timestamp = float(match.group(1))
         if not timestamps or abs(timestamp - timestamps[-1]) >= 0.10:
             timestamps.append(timestamp)
-        if len(timestamps) >= MAX_SCENE_CANDIDATES:
-            break
+    if len(timestamps) > MAX_SCENE_CANDIDATES:
+        last = len(timestamps) - 1
+        timestamps = [
+            timestamps[round(index * last / (MAX_SCENE_CANDIDATES - 1))]
+            for index in range(MAX_SCENE_CANDIDATES)
+        ]
     return timestamps
 
 
@@ -519,6 +523,8 @@ def main() -> int:
     )
 
     warnings: list[str] = []
+    if not keyframes:
+        warnings.append("no_decodable_keyframes")
     contact_sheet = build_contact_sheet(args.out, keyframes)
     if keyframes and contact_sheet is None:
         warnings.append("contact_sheet_generation_failed")
