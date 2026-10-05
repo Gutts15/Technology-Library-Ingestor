@@ -6,6 +6,7 @@ on:
     paths:
       - "src/**"
       - "scripts/**"
+      - "tests/test_ingest_video*.py"
       - ".github/workflows/synthetic-smoke-test.yml"
 
 permissions:
@@ -184,6 +185,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-por fonts-dejavu-core
+
+      - name: Validate real FFmpeg scene sampling with synthetic media
+        run: python3 -m unittest discover -s tests -p 'test_ingest_video*.py' -v
 
       - name: Create synthetic video with readable text
         run: |
