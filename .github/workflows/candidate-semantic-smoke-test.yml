@@ -13,6 +13,7 @@ on:
       - "src/candidate_split_plan.py"
       - "src/candidate_quality_benchmark.py"
       - "src/ready_evidence_bridge.py"
+      - "src/evidence_quality.py"
       - "src/file_evidence_semantic_plan.py"
       - "src/file_evidence_semantic_batch.py"
       - "src/file_evidence_candidate_bridge.py"
@@ -30,6 +31,7 @@ on:
       - "tests/test_file_evidence_semantic_plan.py"
       - "tests/test_file_evidence_semantic_batch.py"
       - "tests/test_file_evidence_candidate_bridge.py"
+      - "tests/test_file_evidence_quality.py"
       - "tests/test_stage16b_real_item.py"
       - "tests/test_stage16b_unicode_storage.py"
       - "tests/test_rclone_bridge_selection.py"
@@ -209,6 +211,9 @@ jobs:
 
       - name: Validate production file-evidence candidate bridge
         run: python3 tests/test_file_evidence_candidate_bridge.py
+
+      - name: Validate automatic evidence availability gate
+        run: python3 -m unittest discover -s tests -p test_file_evidence_quality.py -v
 
       - name: Validate opt-in real-item selector
         run: python3 tests/test_stage16b_real_item.py

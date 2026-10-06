@@ -14,7 +14,11 @@ remains the authority for source media, processing state and canonical records.
   scheduled post-drain no-op. Real-file intake remains disabled pending a
   separately reviewed change; checked public logs/artifacts showed no private
   exposure.
-- Stages 21–26: complete grounded evidence, automatic relevance decisions,
+- Stage 21: IN_PROGRESS — synthetic FFmpeg scene-sampling validation passed;
+  the automatic candidate boundary now assesses extracted evidence by media
+  kind and holds empty or weak-only content. See `STAGE21_EVIDENCE_GATE.md`.
+  Real-file intake remains disabled.
+- Stages 22–26: complete automatic relevance decisions,
   consolidation, safe canonical promotion, retrieval and bounded operation at
   R$0 mandatory additional recurring cost.
 - Stage 27: pass the Charter's 500-item black-box acceptance test before the
