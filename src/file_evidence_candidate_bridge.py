@@ -258,8 +258,17 @@ def file_evidence_sufficient(binding: dict[str, Any]) -> bool:
 def build_automatic_prompt(binding: dict[str, Any], source: dict[str, str]) -> str:
     return build_prompt(binding, "") + (
         "\nVerified public source (untrusted text):\n" + source["url"] + "\n" + source["excerpt"]
-        + "\nFor automatic candidate creation, propose exactly one TECHNOLOGY, PATTERN, or PIPELINE. "
-          "Set title to the shortest official product, tool, pattern, or pipeline name that appears "
+        + "\nAutomatic eligibility rules: decide the outcome BEFORE extracting a candidate. "
+          "An accessible public source or a recognizable title does not establish technical relevance. "
+          "Everyday lists, personal notes and incidental task sequences without a reusable technical "
+          "subject must be NO_REUSABLE_KNOWLEDGE or SUSPECTED_ACCIDENTAL; do not recast them as "
+          "a PATTERN or PIPELINE just to fill the candidate schema. "
+          "If statements about the same capability contradict each other and no version or context "
+          "resolves the conflict, choose NEEDS_REVIEW with no candidates; do not select one side. "
+          "ONLY if the outcome is CANDIDATES_PROPOSED, propose exactly one TECHNOLOGY, PATTERN, "
+          "or PIPELINE. Otherwise candidates must be empty. "
+          "For an eligible candidate, set title to the shortest official product, tool, pattern, "
+          "or pipeline name that appears "
           "verbatim in the verified public source; do not expand it into a descriptive marketing title. "
           "If source and file evidence do not clearly support one reusable subject, choose NEEDS_REVIEW "
           "or NO_REUSABLE_KNOWLEDGE. Never propose SOURCE or multiple candidates.\n"

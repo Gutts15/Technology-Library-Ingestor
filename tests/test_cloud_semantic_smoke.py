@@ -2,10 +2,18 @@
 
 import unittest
 
-from scripts.cloud_semantic_smoke import cases, check_result
+from scripts.cloud_semantic_smoke import cases, check_result, build_automatic_prompt
 
 
 class CloudProofContractTests(unittest.TestCase):
+    def test_production_prompt_classifies_before_conditional_extraction(self):
+        prompt = build_automatic_prompt({"kind": "document", "semantic_summary": {}},
+            {"url": "https://example.invalid/source", "excerpt": "Synthetic evidence."})
+        self.assertIn("decide the outcome BEFORE extracting a candidate", prompt)
+        self.assertIn("ONLY if the outcome is CANDIDATES_PROPOSED", prompt)
+        self.assertIn("Otherwise candidates must be empty", prompt)
+        self.assertIn("do not select one side", prompt)
+
     def test_missing_or_invalid_model_output_cannot_pass(self):
         self.assertEqual(check_result(cases()[0], None, ["invalid"]), ["model_contract_invalid"])
 

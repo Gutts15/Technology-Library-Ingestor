@@ -91,6 +91,16 @@ def main() -> int:
         print("cloud_semantic_smoke_error code=model_unavailable")
         return 2
     started = time.monotonic()
+    try:
+        warm = request_json(args.endpoint, "/api/generate", {
+            "model": MODEL, "prompt": "", "stream": False, "keep_alive": "10m",
+            "options": {"num_ctx": 4096, "num_gpu": 0, "num_thread": 4},
+        }, timeout=90)
+        if warm.get("done") is not True:
+            raise ValueError("warmup_incomplete")
+    except Exception:
+        print("cloud_semantic_smoke_error code=model_warmup_failed")
+        return 2
     failed = 0
     for case in cases():
         elapsed = time.monotonic() - started
@@ -116,6 +126,10 @@ def main() -> int:
             payload = json.loads(response["message"]["content"])
             plan, errors = build_plan(envelope, "", payload)
             reasons = check_result(case, plan, errors)
+        except TimeoutError:
+            reasons = ["inference_timeout"]
+        except json.JSONDecodeError:
+            reasons = ["model_json_invalid"]
         except Exception:
             reasons = ["inference_failed"]
         failed += bool(reasons)
