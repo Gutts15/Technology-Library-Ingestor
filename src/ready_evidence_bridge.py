@@ -25,6 +25,8 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from evidence_quality import assess_evidence
+
 SCHEMA_VERSION = 1
 BRIDGE_VERSION = "0.1.0"
 DEFAULT_HANDOFF = "99_INBOX/CURATION/HANDOFF/latest.json"
@@ -210,6 +212,7 @@ def build_envelope(
             "preview": item.get("preview_path"),
         },
         "semantic_summary": semantic,
+        "evidence_assessment": assess_evidence(item["kind"], semantic),
         "candidate_created": False,
         "curation_transition_performed": False,
         "canonical_write_performed": False,

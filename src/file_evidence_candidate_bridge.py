@@ -26,6 +26,7 @@ from typing import Any
 from candidate_queue import validate_candidate
 from candidate_source_probe import extract_urls, fetch_one, normalize_url
 from candidate_validator import normalize_title
+from evidence_quality import assess_evidence, usable_summary
 from file_evidence_semantic_plan import build_model_response_schema, build_prompt, envelope_binding, validate_model_payload
 from ready_evidence_bridge import read_json_bytes, semantic_summary
 
@@ -154,6 +155,9 @@ def bound_envelope(item: dict[str, str], envelope: dict[str, Any] | None, eviden
     reconstructed, reconstruction_errors = semantic_summary(read_json_bytes(evidence_raw))
     if reconstruction_errors or reconstructed != binding["semantic_summary"]:
         return None, "semantic_summary_mismatch"
+    assessment = assess_evidence(binding["kind"], reconstructed)
+    if "evidence_assessment" in envelope and envelope["evidence_assessment"] != assessment:
+        return None, "evidence_assessment_mismatch"
     return binding, None
 
 
@@ -244,23 +248,11 @@ def subject_supported(title: str, support_text: str) -> bool:
 
 
 def file_evidence_sufficient(binding: dict[str, Any]) -> bool:
-    """Require local textual evidence before automatic candidate creation for video."""
-    if binding.get("kind") != "video":
-        return True
+    """Require an eligible evidence channel for every supported file kind."""
     semantic = binding.get("semantic_summary")
     if not isinstance(semantic, dict):
         return False
-    evidence = semantic.get("evidence")
-    if not isinstance(evidence, dict):
-        return False
-    for channel in ("ocr", "speech"):
-        records = evidence.get(channel)
-        if not isinstance(records, list):
-            continue
-        for record in records:
-            if isinstance(record, dict) and isinstance(record.get("text"), str) and record["text"].strip():
-                return True
-    return False
+    return assess_evidence(str(binding.get("kind")), semantic)["state"] == "ELIGIBLE"
 
 
 def one_line(value: str) -> bool:
@@ -364,6 +356,7 @@ def run(
     else:
         if not file_evidence_sufficient(binding):
             return "held", "insufficient_file_evidence"
+        binding = {**binding, "semantic_summary": usable_summary(binding["kind"], binding["semantic_summary"])}
         source, error = verified_source(
             binding["semantic_summary"],
             min(max(timeout, 1.0), 20.0),

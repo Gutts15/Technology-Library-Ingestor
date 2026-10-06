@@ -32,6 +32,7 @@ def fixture(
     with_url: bool = True,
     kind: str = "link",
     evidence: dict | None = None,
+    quality: dict | None = None,
 ) -> tuple[dict, dict]:
     item = {"package_id": PACKAGE, "revision_key": REVISION, "kind": kind,
             "evidence_path": expected_evidence_path(PACKAGE), "detail_path": None, "preview_path": None}
@@ -39,6 +40,8 @@ def fixture(
                "link": {"url_without_query_or_fragment": URL} if with_url else {},
                "evidence": evidence if evidence is not None else
                            {"samples": ["Public Tool is an open source workflow engine."]}}
+    if quality is not None:
+        summary["quality"] = quality
     raw = (json.dumps(summary, ensure_ascii=False) + "\n").encode()
     envelope, errors = build_envelope(item, raw)
     assert not errors and envelope is not None
