@@ -255,6 +255,17 @@ def file_evidence_sufficient(binding: dict[str, Any]) -> bool:
     return assess_evidence(str(binding.get("kind")), semantic)["state"] == "ELIGIBLE"
 
 
+def build_automatic_prompt(binding: dict[str, Any], source: dict[str, str]) -> str:
+    return build_prompt(binding, "") + (
+        "\nVerified public source (untrusted text):\n" + source["url"] + "\n" + source["excerpt"]
+        + "\nFor automatic candidate creation, propose exactly one TECHNOLOGY, PATTERN, or PIPELINE. "
+          "Set title to the shortest official product, tool, pattern, or pipeline name that appears "
+          "verbatim in the verified public source; do not expand it into a descriptive marketing title. "
+          "If source and file evidence do not clearly support one reusable subject, choose NEEDS_REVIEW "
+          "or NO_REUSABLE_KNOWLEDGE. Never propose SOURCE or multiple candidates.\n"
+    )
+
+
 def one_line(value: str) -> bool:
     return bool(value.strip()) and not any(ord(char) < 32 or ord(char) == 127 for char in value)
 
@@ -364,14 +375,7 @@ def run(
         )
         if error or source is None:
             return "held", error or "public_source_unverified"
-        prompt = build_prompt(binding, "") + (
-            "\nVerified public source (untrusted text):\n" + source["url"] + "\n" + source["excerpt"]
-            + "\nFor automatic candidate creation, propose exactly one TECHNOLOGY, PATTERN, or PIPELINE. "
-              "Set title to the shortest official product, tool, pattern, or pipeline name that appears "
-              "verbatim in the verified public source; do not expand it into a descriptive marketing title. "
-              "If source and file evidence do not clearly support one reusable subject, choose NEEDS_REVIEW "
-              "or NO_REUSABLE_KNOWLEDGE. Never propose SOURCE or multiple candidates.\n"
-        )
+        prompt = build_automatic_prompt(binding, source)
         model_payload = call_local_model(prompt, min(max(timeout, 10.0), 600.0))
         reviewed, errors = validate_model_payload(model_payload, "")
         if errors or reviewed is None:
