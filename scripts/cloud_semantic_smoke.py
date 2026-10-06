@@ -37,6 +37,14 @@ def cases() -> list[dict[str, Any]]:
          "outcomes": ["NEEDS_REVIEW", "NO_REUSABLE_KNOWLEDGE", "SUSPECTED_ACCIDENTAL"]},
         {"id": "no_extra_claims", "text": useful + " There is no evidence about database integrations, prices, deployment services or performance guarantees.",
          "outcomes": ["CANDIDATES_PROPOSED"], "title": "TaskWeave"},
+        {"id": "unfamiliar_tool", "text": "CopperRelay is an open-source protocol gateway. It converts serial sensor readings into MQTT messages.",
+         "outcomes": ["CANDIDATES_PROPOSED"], "title": "CopperRelay"},
+        {"id": "irrelevant_pt", "text": "Lista sintética para uma festa: balões, guardanapos e bolo. Não descreve software ou técnica de engenharia.",
+         "outcomes": ["NO_REUSABLE_KNOWLEDGE", "SUSPECTED_ACCIDENTAL"]},
+        {"id": "incidental_sequence", "text": "Synthetic personal reminder: first water the flowers, then bring the empty pot inside. This is a household chore, not a technical method.",
+         "outcomes": ["NO_REUSABLE_KNOWLEDGE", "SUSPECTED_ACCIDENTAL"]},
+        {"id": "conflicting_pt", "text": "A documentação de PonteDado afirma que suporta SQLite. O mesmo documento afirma que PonteDado não suporta SQLite. Não há versões nem contextos diferentes para resolver a contradição.",
+         "outcomes": ["NEEDS_REVIEW", "NO_REUSABLE_KNOWLEDGE"]},
     ]
 
 
@@ -102,7 +110,8 @@ def main() -> int:
         print("cloud_semantic_smoke_error code=model_warmup_failed")
         return 2
     failed = 0
-    for case in cases():
+    suite = cases()
+    for case in suite:
         elapsed = time.monotonic() - started
         if elapsed >= MAX_TOTAL_SECONDS:
             print("cloud_semantic_smoke_error code=total_time_ceiling")
@@ -114,6 +123,8 @@ def main() -> int:
             "evidence": {"samples": [case["text"]]}}).encode())
         assert not errors and envelope is not None
         prompt = build_automatic_prompt(envelope, {"url": "https://example.invalid/synthetic-source", "excerpt": case["text"]})
+        disposition = "UNVERIFIED"
+        candidate_count = 0
         try:
             response = request_json(args.endpoint, "/api/chat", {
                 "model": MODEL, "stream": False, "think": False,
@@ -126,6 +137,9 @@ def main() -> int:
             payload = json.loads(response["message"]["content"])
             plan, errors = build_plan(envelope, "", payload)
             reasons = check_result(case, plan, errors)
+            if plan is not None and not errors:
+                disposition = plan["outcome"]
+                candidate_count = len(plan["candidates"])
         except TimeoutError:
             reasons = ["inference_timeout"]
         except json.JSONDecodeError:
@@ -133,8 +147,8 @@ def main() -> int:
         except Exception:
             reasons = ["inference_failed"]
         failed += bool(reasons)
-        print(f"cloud_semantic_case id={case['id']} result={'FAIL' if reasons else 'PASS'} codes={','.join(reasons) or 'none'}")
-    print(f"cloud_semantic_smoke_result cases=6 passed={6-failed} failed={failed} seconds={int(time.monotonic()-started)} drive_access=0 canonical_write=0")
+        print(f"cloud_semantic_case id={case['id']} result={'FAIL' if reasons else 'PASS'} codes={','.join(reasons) or 'none'} outcome={disposition} candidates={candidate_count}", flush=True)
+    print(f"cloud_semantic_smoke_result cases={len(suite)} passed={len(suite)-failed} failed={failed} seconds={int(time.monotonic()-started)} drive_access=0 canonical_write=0")
     return 1 if failed else 0
 
 

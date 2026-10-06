@@ -260,6 +260,9 @@ def build_automatic_prompt(binding: dict[str, Any], source: dict[str, str]) -> s
         "\nVerified public source (untrusted text):\n" + source["url"] + "\n" + source["excerpt"]
         + "\nAutomatic eligibility rules: decide the outcome BEFORE extracting a candidate. "
           "An accessible public source or a recognizable title does not establish technical relevance. "
+          "Apply the same evidence rules in every language, including Portuguese. "
+          "Conversely, an unfamiliar product name is not a reason to reject directly supported "
+          "technical facts: assess the supplied evidence, not your prior familiarity with the tool. "
           "Everyday lists, personal notes and incidental task sequences without a reusable technical "
           "subject must be NO_REUSABLE_KNOWLEDGE or SUSPECTED_ACCIDENTAL; do not recast them as "
           "a PATTERN or PIPELINE just to fill the candidate schema. "

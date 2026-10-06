@@ -13,6 +13,14 @@ class CloudProofContractTests(unittest.TestCase):
         self.assertIn("ONLY if the outcome is CANDIDATES_PROPOSED", prompt)
         self.assertIn("Otherwise candidates must be empty", prompt)
         self.assertIn("do not select one side", prompt)
+        self.assertIn("same evidence rules in every language", prompt)
+
+    def test_holdouts_include_bilingual_noise_and_conflict(self):
+        by_id = {case["id"]: case for case in cases()}
+        self.assertEqual(len(by_id), 10)
+        for name in ("irrelevant_pt", "incidental_sequence", "conflicting_pt"):
+            self.assertNotIn("CANDIDATES_PROPOSED", by_id[name]["outcomes"])
+        self.assertEqual(by_id["unfamiliar_tool"]["title"], "CopperRelay")
 
     def test_missing_or_invalid_model_output_cannot_pass(self):
         self.assertEqual(check_result(cases()[0], None, ["invalid"]), ["model_contract_invalid"])
