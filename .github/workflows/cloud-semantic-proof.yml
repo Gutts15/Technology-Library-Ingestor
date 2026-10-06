@@ -42,7 +42,7 @@ jobs:
             rm -rf "$proof_dir"
           }
           trap cleanup EXIT
-          curl --fail --silent --show-error --max-time 240 \
+          curl --fail --location --silent --show-error --max-time 240 \
             https://github.com/ollama/ollama/releases/download/v0.40.0/ollama-linux-amd64.tar.zst \
             --output "$proof_dir/runtime.tar.zst"
           echo 'c94aa4156b3d13e64ebc2efe5ea53f015384c882be776e6695cfb37fb180d5ad  '"$proof_dir/runtime.tar.zst" | sha256sum --check --status
