@@ -17,8 +17,8 @@ from file_evidence_candidate_bridge import AUTOMATIC_MODEL_RESPONSE_SCHEMA, buil
 from file_evidence_semantic_plan import build_plan
 from ready_evidence_bridge import build_envelope, expected_evidence_path
 
-MODEL = "qwen3:1.7b"
-MODEL_DIGEST = "8f68893c685c3ddff2aa3fffce2aa60a30bb2da65ca488b61fff134a4d1730e7"
+MODEL = "qwen3:4b"
+MODEL_DIGEST = "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7"
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_TOTAL_SECONDS = 480
 
