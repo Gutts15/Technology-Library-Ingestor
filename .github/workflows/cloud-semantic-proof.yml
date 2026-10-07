@@ -57,5 +57,5 @@ jobs:
             sleep 1
           done
           test "$ready" = true
-          timeout 240 "$proof_dir/runtime/bin/ollama" pull qwen3:4b > "$proof_dir/pull.log" 2>&1
+          timeout 240 "$proof_dir/runtime/bin/ollama" pull qwen3.5:4b > "$proof_dir/pull.log" 2>&1
           python3 scripts/cloud_semantic_smoke.py
