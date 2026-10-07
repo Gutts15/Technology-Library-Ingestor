@@ -1,11 +1,30 @@
 """Independent expectations for the bounded synthetic model proof."""
 
 import unittest
+import io
+from contextlib import redirect_stdout
+from unittest.mock import patch
 
-from scripts.cloud_semantic_smoke import cases, check_result, build_automatic_prompt
+from scripts.cloud_semantic_smoke import cases, check_result, build_automatic_prompt, main
 
 
 class CloudProofContractTests(unittest.TestCase):
+    def test_invalid_case_windows_stop_before_model_access(self):
+        for start, count in ((-1, 5), (0, 0), (0, 6), (9, 2)):
+            with self.subTest(start=start, count=count), patch("sys.argv",
+                    ["proof", "--start", str(start), "--count", str(count)]), \
+                    patch("scripts.cloud_semantic_smoke.request_json") as network, \
+                    redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(main(), 2)
+                self.assertIn("invalid_case_window", output.getvalue())
+                network.assert_not_called()
+
+    def test_two_five_case_batches_cover_frozen_suite_without_duplicates(self):
+        suite = cases()
+        combined = suite[:5] + suite[5:10]
+        self.assertEqual(combined, suite)
+        self.assertEqual(len({item["id"] for item in combined}), 10)
+
     def test_production_prompt_classifies_before_conditional_extraction(self):
         prompt = build_automatic_prompt({"kind": "document", "semantic_summary": {}},
             {"url": "https://example.invalid/source", "excerpt": "Synthetic evidence."})
