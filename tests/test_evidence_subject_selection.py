@@ -3,10 +3,13 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from evidence_subject_selection import extraction_prompt, validate_selection
+from evidence_subject_selection import extraction_prompt, validate_selection, selection_prompt
 
 
 class SubjectSelectionTests(unittest.TestCase):
+    def test_prompt_requests_the_named_quote_required_by_validation(self):
+        self.assertIn("quote must include the subject name verbatim", selection_prompt("Synthetic source."))
+
     def test_verbatim_bilingual_technical_capability(self):
         for source, subject in [("TaskWeave schedules dependent tasks.", "TaskWeave"),
                                 ("FilaTrilha organiza tarefas dependentes.", "FilaTrilha")]:
