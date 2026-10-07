@@ -125,6 +125,8 @@ def main() -> int:
         assert not errors and envelope is not None
         disposition = "UNVERIFIED"
         candidate_count = 0
+        stage = "selection"
+        selection_error = None
         try:
             base_request = {
                 "model": MODEL, "stream": False, "think": False,
@@ -145,6 +147,7 @@ def main() -> int:
             if selection_error or selection is None:
                 raise ValueError("selection_invalid")
             if selection["decision"] == "TECHNICAL":
+                stage = "extraction"
                 payload = infer(AUTOMATIC_MODEL_RESPONSE_SCHEMA, extraction_prompt(selection, case["text"]))
             else:
                 payload = {"outcome": "NO_REUSABLE_KNOWLEDGE" if selection["decision"] == "NON_TECHNICAL"
@@ -160,7 +163,7 @@ def main() -> int:
         except json.JSONDecodeError:
             reasons = ["model_json_invalid"]
         except Exception:
-            reasons = ["inference_failed"]
+            reasons = [selection_error or f"{stage}_failed"]
         failed += bool(reasons)
         print(f"cloud_semantic_case id={case['id']} result={'FAIL' if reasons else 'PASS'} codes={','.join(reasons) or 'none'} outcome={disposition} candidates={candidate_count}", flush=True)
     print(f"cloud_semantic_smoke_result cases={len(suite)} passed={len(suite)-failed} failed={failed} seconds={int(time.monotonic()-started)} drive_access=0 canonical_write=0")
