@@ -5,6 +5,8 @@ on:
     branches: [stage21-cloud-semantic-proof]
     paths:
       - "scripts/cloud_semantic_smoke.py"
+      - "scripts/cloud_semantic_holdouts.py"
+      - "tests/test_cloud_semantic_holdouts.py"
       - "src/evidence_subject_selection.py"
       - "tests/test_evidence_subject_selection.py"
       - ".github/workflows/cloud-semantic-proof.yml"
@@ -37,6 +39,7 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_cloud_semantic_smoke.py -v
           python3 -m unittest discover -s tests -p test_evidence_subject_selection.py -v
+          python3 -m unittest discover -s tests -p test_cloud_semantic_holdouts.py -v
           proof_dir="${RUNNER_TEMP}/tl-cloud-proof"
           mkdir -p "$proof_dir/runtime" "$proof_dir/models"
           server_pid=''
@@ -61,9 +64,12 @@ jobs:
           done
           test "$ready" = true
           timeout 240 "$proof_dir/runtime/bin/ollama" pull qwen3.5:9b > "$proof_dir/pull.log" 2>&1
-          first=0
-          python3 scripts/cloud_semantic_smoke.py --start 0 --count 5 || first=$?
-          second=0
-          python3 scripts/cloud_semantic_smoke.py --start 5 --count 5 || second=$?
-          echo "cloud_semantic_batches first_exit=$first second_exit=$second"
-          test "$first" = 0 && test "$second" = 0
+          failed_batches=0
+          for start in 0 5 10 15; do
+            result=0
+            python3 scripts/cloud_semantic_smoke.py --suite holdouts --start "$start" --count 5 || result=$?
+            echo "cloud_semantic_batch suite=holdouts start=$start exit=$result"
+            if [ "$result" != 0 ]; then failed_batches=$((failed_batches + 1)); fi
+          done
+          echo "cloud_semantic_batches suite=holdouts failed=$failed_batches"
+          test "$failed_batches" = 0

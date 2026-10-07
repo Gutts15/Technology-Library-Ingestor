@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.cloud_semantic_holdouts import holdout_cases
 from candidate_semantic_local import endpoint_is_loopback
 from file_evidence_candidate_bridge import AUTOMATIC_MODEL_RESPONSE_SCHEMA, build_automatic_prompt
 from file_evidence_semantic_plan import build_plan
@@ -59,10 +61,17 @@ def check_result(case: dict[str, Any], plan: dict[str, Any] | None, errors: list
     if "title" in case:
         if len(candidates) != 1 or candidates[0]["title"] != case["title"]:
             reasons.append("subject_not_preserved")
-        elif case["id"] == "no_extra_claims":
+        else:
             claims = " ".join(candidates[0]["claims"]).lower()
-            if any(term in claims for term in ("postgres", "kubernetes", "guarantee", "pricing", "cloud service")):
+            body = candidates[0].get("summary", "").lower() + " " + claims
+            forbidden = case.get("forbidden_terms", [])
+            if case["id"] == "no_extra_claims":
+                forbidden = ["postgres", "kubernetes", "guarantee", "pricing", "cloud service"]
+            if any(term in body for term in forbidden):
                 reasons.append("unsupported_claim")
+            if any(not any(token in claims for token in alternatives)
+                   for alternatives in case.get("required_claim_tokens", [])):
+                reasons.append("missing_core_claim")
     elif candidates:
         reasons.append("unsafe_candidate")
     return reasons
@@ -89,8 +98,10 @@ def main() -> int:
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--count", type=int, default=5)
     parser.add_argument("--mode", choices=("combined", "selected"), default="combined")
+    parser.add_argument("--suite", choices=("original", "holdouts"), default="original")
     args = parser.parse_args()
-    if args.start < 0 or not 1 <= args.count <= 5 or args.start + args.count > len(cases()):
+    all_cases = cases() if args.suite == "original" else holdout_cases()
+    if args.start < 0 or not 1 <= args.count <= 5 or args.start + args.count > len(all_cases):
         print("cloud_semantic_smoke_error code=invalid_case_window")
         return 2
     if not endpoint_is_loopback(args.endpoint):
@@ -117,7 +128,7 @@ def main() -> int:
         print("cloud_semantic_smoke_error code=model_warmup_failed")
         return 2
     failed = 0
-    suite = cases()[args.start:args.start + args.count]
+    suite = all_cases[args.start:args.start + args.count]
     for case in suite:
         elapsed = time.monotonic() - started
         if elapsed >= MAX_TOTAL_SECONDS:
@@ -177,7 +188,7 @@ def main() -> int:
             reasons = [selection_error or f"{stage}_failed"]
         failed += bool(reasons)
         print(f"cloud_semantic_case id={case['id']} result={'FAIL' if reasons else 'PASS'} codes={','.join(reasons) or 'none'} outcome={disposition} candidates={candidate_count}", flush=True)
-    print(f"cloud_semantic_smoke_result start={args.start} mode={args.mode} cases={len(suite)} passed={len(suite)-failed} failed={failed} seconds={int(time.monotonic()-started)} drive_access=0 canonical_write=0")
+    print(f"cloud_semantic_smoke_result suite={args.suite} start={args.start} mode={args.mode} cases={len(suite)} passed={len(suite)-failed} failed={failed} seconds={int(time.monotonic()-started)} drive_access=0 canonical_write=0")
     return 1 if failed else 0
 
 

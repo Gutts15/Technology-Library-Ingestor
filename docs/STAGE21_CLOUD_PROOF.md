@@ -17,7 +17,7 @@ temporary runtime and model directory. It has no daily schedule or main trigger.
   `56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90`.
 - Loopback server only; Ollama cloud disabled; no paid API or remote inference.
 - Serial concurrency, 20-minute qualification-job ceiling, two serial benchmark
-  batches of five cases, each with a 480-second ceiling including preload, and
+  batches of at most five cases, each with a 480-second ceiling including preload, and
   bounded response size. This is not a change to daily intake/session limits.
 - Only synthetic evidence and synthetic public-source excerpts. No raw model
   response, source text or rationale is printed or retained; diagnostics use
@@ -104,6 +104,35 @@ found in this checked coverage. Each run had zero artifacts. The model proof
 uses only the frozen synthetic inputs, prints fixed result codes and has no
 Drive credentials. These checks are bounded evidence, not proof of absence
 outside the inspected logs or proof of future private-data execution safety.
+
+## Independent expanded acceptance (pending execution)
+
+After the ten-case viability PASS, twenty new synthetic textual cases were
+defined before running the unchanged model and combined prompt. Their
+canonical JSON SHA-256 (sorted keys, compact separators, UTF-8 without ASCII
+escaping) is `8b3a3dcde79143669acd159783c0bbc5bbada727d4d97543f392d001bd6fce69`.
+The unit suite locks both inputs and expected outcomes to this digest.
+
+Ten useful cases cover stream parsing, protocols, API diffs, OCR-like and
+transcript-like excerpts, mixed noise, resolved version differences, encoding,
+bounded retries and format conversion. Ten negative cases cover incidental
+technical words, unsupported marketing, URL/name-only inputs, unresolved
+contradictions, unreadable OCR-like output, role/JSON injection and domestic
+sequences. These are synthetic text excerpts, not a live multimodal decoding
+or private-storage integration test.
+
+Every useful case must preserve its subject and core capability markers in
+the extracted claims. Specified unsupported integrations, certification,
+subscription and performance claims are rejected in both summary and claims.
+Every negative case must create zero candidates. All twenty must pass; do
+not relax expectations after observing output. Lexical probes only detect the
+specified errors; they do not prove complete semantic grounding.
+
+The next branch run executes four serial five-case batches, preserving the
+model/runtime pins, inference settings, 20-minute job ceiling, zero artifacts,
+no Drive access and no production/schedule changes. The original ten-case
+suite is retained unchanged and selectable; its prior PASS is not substituted
+for this independent acceptance.
 
 The R$0 execution basis is a public repository using standard GitHub-hosted
 runners, no retained artifacts/cache, no paid model provider and no user PC.
