@@ -5,6 +5,8 @@ on:
     branches: [stage21-cloud-semantic-proof]
     paths:
       - "scripts/cloud_semantic_smoke.py"
+      - "src/evidence_subject_selection.py"
+      - "tests/test_evidence_subject_selection.py"
       - ".github/workflows/cloud-semantic-proof.yml"
 
 permissions:
@@ -34,6 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_cloud_semantic_smoke.py -v
+          python3 -m unittest discover -s tests -p test_evidence_subject_selection.py -v
           proof_dir="${RUNNER_TEMP}/tl-cloud-proof"
           mkdir -p "$proof_dir/runtime" "$proof_dir/models"
           server_pid=''
