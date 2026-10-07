@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Create one private chat-research candidate from one bound FILE_EVIDENCE item.
 
-The only model is loopback Ollama gpt-oss:20b. Public URLs are probed before
-the model is called. No path in this module targets 00_LIBRARY for writing.
+The legacy default is loopback Ollama gpt-oss:20b. An explicit experimental
+opt-in uses pinned CPU inference. Public URLs are probed before the model is
+called. No path in this module targets 00_LIBRARY for writing.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from candidate_validator import normalize_title
 from evidence_quality import assess_evidence, usable_summary
 from file_evidence_semantic_plan import build_model_response_schema, build_prompt, envelope_binding, validate_model_payload
 from ready_evidence_bridge import read_json_bytes, semantic_summary
+from pinned_cpu_inference import MODEL as CPU_MODEL, infer as infer_pinned_cpu
 
 MODEL = "gpt-oss:20b"
 ENDPOINT = "http://127.0.0.1:11434"
@@ -345,6 +347,8 @@ def run(
     package_id: str | None,
     timeout: float,
     explicit_source_url: str | None = None,
+    *,
+    pinned_cpu: bool = False,
 ) -> tuple[str, str]:
     index = safe_json(storage.read(f"{FILE_ROOT}/index.json"), MAX_INDEX_BYTES)
     item, error = select_item(index, package_id)
@@ -388,7 +392,9 @@ def run(
         if error or source is None:
             return "held", error or "public_source_unverified"
         prompt = build_automatic_prompt(binding, source)
-        model_payload = call_local_model(prompt, min(max(timeout, 10.0), 600.0))
+        model_timeout = min(max(timeout, 10.0), 600.0)
+        model_payload = (infer_pinned_cpu(prompt, AUTOMATIC_MODEL_RESPONSE_SCHEMA, model_timeout)
+                         if pinned_cpu else call_local_model(prompt, model_timeout))
         reviewed, errors = validate_model_payload(model_payload, "")
         if errors or reviewed is None:
             return "held", model_contract_reason(errors)
@@ -431,6 +437,8 @@ def main() -> int:
     parser.add_argument("--package-id", help="Exact active package; omit to select the first indexed package.")
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--source-url", help="Explicit public provenance URL; it is normalized and fetched before model use.")
+    parser.add_argument("--pinned-cpu-model", action="store_true",
+                        help="Explicit experimental pinned CPU model; does not enable real intake or publication.")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.package_id is not None and not ID_RE.fullmatch(args.package_id):
@@ -445,10 +453,11 @@ def main() -> int:
             args.package_id,
             args.timeout,
             args.source_url,
+            pinned_cpu=args.pinned_cpu_model,
         )
     report = {"schema_version": 1, "stage": "16B", "outcome": outcome, "reason_code": reason,
               "candidate_write": int(outcome == "created"), "canonical_write": 0,
-              "model": MODEL, "paid_model": 0}
+              "model": CPU_MODEL if args.pinned_cpu_model else MODEL, "paid_model": 0}
     if args.report:
         try:
             args.report.parent.mkdir(parents=True, exist_ok=True)

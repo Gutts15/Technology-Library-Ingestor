@@ -17,6 +17,7 @@ on:
       - "src/file_evidence_semantic_plan.py"
       - "src/file_evidence_semantic_batch.py"
       - "src/file_evidence_candidate_bridge.py"
+      - "src/pinned_cpu_inference.py"
       - "src/stage16b_real_item.py"
       - "src/rclone_bridge.py"
       - "src/media_router.py"
@@ -32,6 +33,9 @@ on:
       - "tests/test_file_evidence_semantic_batch.py"
       - "tests/test_file_evidence_candidate_bridge.py"
       - "tests/test_file_evidence_quality.py"
+      - "tests/test_pinned_cpu_inference.py"
+      - "tests/test_pinned_cpu_candidate_bridge.py"
+      - "tests/test_cloud_candidate_bridge_smoke.py"
       - "tests/test_stage16b_real_item.py"
       - "tests/test_stage16b_unicode_storage.py"
       - "tests/test_rclone_bridge_selection.py"
@@ -214,6 +218,12 @@ jobs:
 
       - name: Validate automatic evidence availability gate
         run: python3 -m unittest discover -s tests -p test_file_evidence_quality.py -v
+
+      - name: Validate opt-in pinned CPU transport and bridge
+        run: python3 -m unittest discover -s tests -p 'test_pinned_cpu*.py' -v
+
+      - name: Validate synthetic live-bridge harness contracts
+        run: python3 -m unittest discover -s tests -p test_cloud_candidate_bridge_smoke.py -v
 
       - name: Validate opt-in real-item selector
         run: python3 tests/test_stage16b_real_item.py

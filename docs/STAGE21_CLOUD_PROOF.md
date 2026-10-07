@@ -1,7 +1,8 @@
 # Stage 21 — Synthetic cloud semantic qualification
 
 Stage 21 is IN_PROGRESS. Real intake remains fixture-only. This experiment
-qualifies a possible no-user-PC execution path; it does not replace the
+tests model viability without the user PC; it does not establish eligibility
+to host routine production processing, replace the
 production model or authorize canonical promotion.
 
 The branch-scoped `cloud-semantic-proof.yml` runs CPU inference on a standard
@@ -16,7 +17,7 @@ temporary runtime and model directory. It has no daily schedule or main trigger.
 - Current experimental Qwen3.5 9B GGUF manifest SHA-256:
   `56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90`.
 - Loopback server only; Ollama cloud disabled; no paid API or remote inference.
-- Serial concurrency, 20-minute qualification-job ceiling, two serial benchmark
+- Serial concurrency, 20-minute qualification-job ceiling, four serial benchmark
   batches of at most five cases, each with a 480-second ceiling including preload, and
   bounded response size. This is not a change to daily intake/session limits.
 - Only synthetic evidence and synthetic public-source excerpts. No raw model
@@ -42,6 +43,7 @@ Runtime and model metadata are verified against their official distributions:
 | 37564653759 | Same prototype with fixed-code diagnostics | 6/10 passed in 48 seconds; all four useful selections failed `selection_unbound_evidence`. Instructions omitted a named-quote constraint required by validation; aligned without relaxing the validator. |
 | 37564889059 | Two-step prototype, named-quote instruction aligned | 6/10 passed in 120 seconds; two useful selections remained unbound and two other useful cases were HELD. Not qualified. |
 | 37565477280 | Qwen3.5 9B, combined production prompt, unchanged ten cases | 10/10 passed: two serial five-case batches in 147 and 136 seconds, including preload. Bounded viability PASS; not full production qualification. |
+| 37566524224 | Same pinned model and prompt, twenty frozen independent holdouts | 17 PASS, one confirmed disposition mismatch, two UNVERIFIED extraction failures during job cancellation at the 20-minute ceiling. Expanded acceptance INCOMPLETE; not qualified. |
 
 The production prompt's unconditional instruction to propose exactly one
 candidate was replaced by disposition-first, conditional extraction. The same
@@ -66,8 +68,10 @@ suite without changing any expected outcome: all four useful cases produced
 the expected subject, and all six negative/conflict cases produced no candidate.
 This resolves the bounded no-user-PC viability gate, not the full quality gate.
 
-The next step is a broader independent evidence/claim benchmark, followed by
-private automatic pipeline integration and end-to-end synthetic acceptance.
+The independent evidence/claim benchmark below did not qualify. Its confirmed
+disposition mismatch and two interrupted cases must be resolved without relaxing
+the frozen acceptance. A permitted R$0 production executor must also be verified
+before private automatic integration and end-to-end synthetic acceptance.
 It must preserve the free normal path, private execution inputs and logs,
 conservative handling of noise/conflicts, and useful-content recall. A passing
 model smoke alone does not complete Stage 21 or the full automatic pipeline.
@@ -105,7 +109,13 @@ uses only the frozen synthetic inputs, prints fixed result codes and has no
 Drive credentials. These checks are bounded evidence, not proof of absence
 outside the inspected logs or proof of future private-data execution safety.
 
-## Independent expanded acceptance (pending execution)
+The five additional runs at commit
+`1a9f425489ed58866bf6b9f48ce88926d784bba8` (37566524224, 37566527186,
+37566527259, 37566524366 and 37566524255) had five jobs total. All available
+complete job logs passed the same deterministic pattern checks; all five runs
+had zero artifacts. These were synthetic software checks, not private intake.
+
+## Independent expanded acceptance (INCOMPLETE)
 
 After the ten-case viability PASS, twenty new synthetic textual cases were
 defined before running the unchanged model and combined prompt. Their
@@ -128,13 +138,77 @@ Every negative case must create zero candidates. All twenty must pass; do
 not relax expectations after observing output. Lexical probes only detect the
 specified errors; they do not prove complete semantic grounding.
 
-The next branch run executes four serial five-case batches, preserving the
+Run 37566524224 executed four serial five-case batches, preserving the
 model/runtime pins, inference settings, 20-minute job ceiling, zero artifacts,
 no Drive access and no production/schedule changes. The original ten-case
 suite is retained unchanged and selectable; its prior PASS is not substituted
 for this independent acceptance.
 
-The R$0 execution basis is a public repository using standard GitHub-hosted
+All ten useful holdouts passed. Of the eight completed negative cases, seven
+passed and `url_only` failed: it returned `SUSPECTED_ACCIDENTAL` instead of the
+frozen `NO_REUSABLE_KNOWLEDGE`/`NEEDS_REVIEW` expectation, with zero candidates.
+This is a confirmed classification mismatch, not an observed private write or
+unsafe candidate. Do not change the expectation to accommodate the observed
+result. `json_injection` and `household_pipeline_pt` returned `extraction_failed`
+immediately before job cancellation; both remain UNVERIFIED, not established
+model accuracy failures. The workflow conclusion was `cancelled`, not success.
+The earlier ten-case PASS remains bounded evidence and cannot override this
+expanded INCOMPLETE result. No additional live inference has been scheduled.
+
+## Opt-in private candidate integration (not activated)
+
+`pinned_cpu_inference.py` provides an explicit CPU-only transport. It validates
+the model tag and manifest digest before sending a prompt, disallows proxies
+and redirects, retains the existing strict loopback/port policy, caps prompt
+size at 8 KiB and response size at 64 KiB, and shares a maximum 90-second
+request budget across inventory and inference. Invalid responses fail closed
+without printing content or calling another provider. The prompt byte ceiling
+is a resource guard, not proof of complete token/context coverage; long evidence
+needs separate bounded-chunk acceptance before real intake can be enabled.
+
+The existing candidate bridge has an explicit `--pinned-cpu-model` opt-in;
+its legacy default is unchanged. Real loopback HTTP protocol tests and fixture
+storage tests cover pin rejection, redirects, malformed/oversized input/output,
+weak-evidence rejection, one candidate plus receipt, repeat idempotency and no
+canonical writes. These checks do not establish live-model integration accuracy.
+
+`cloud_candidate_bridge_smoke.py` prepares a five-case live-model acceptance
+through the actual opt-in bridge and ephemeral local fixture storage. It stubs
+only the verified public-source probe with synthetic text; it does not fetch
+real source pages or use Drive. Four useful cases must create exactly one private
+candidate each, repeat without another inference/write, and preserve the source
+subject; one contradiction must be held without a candidate. Live execution
+is pending. No routine schedule or production mode has been enabled.
+
+## Production hosting eligibility gate
+
+The free public-runner billing rule does not establish permission to run a
+general production backend. The current
+[GitHub additional terms](https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features#actions)
+limit hosted-runner activities to the associated software lifecycle and also
+restrict disproportionate/serverless application use. The synthetic proofs
+here test this repository's software. Routine private Library processing is
+not assumed eligible: production hosting on Actions remains NOT_VERIFIED and
+must not be enabled on the strength of these CI results. No inference was added
+to the daily intake workflow.
+
+Alternative hosting has not been provisioned. Current
+[Hugging Face Spaces documentation](https://huggingface.co/docs/hub/spaces-overview)
+requires a paid plan to create ordinary compute-backed Gradio/Docker Spaces;
+zero hourly CPU price alone is not R$0 account eligibility. The separate
+[ZeroGPU documentation](https://huggingface.co/docs/hub/spaces-zerogpu)
+describes a free-account exception with verified email, account-age requirements,
+Gradio-only hosting and a five-GPU-minute daily quota. That exception has not
+been verified for account access, this workload, privacy or production capacity;
+it is not a qualified drop-in executor. Current
+[OCI Always Free documentation](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+lists 2 OCPUs/12 GB for Always Free Arm tenancies, capacity constraints and idle
+resource reclamation. OCI is only a candidate pending account access, actual
+capacity, runtime/privacy proof and explicit setup authority. No account, trial,
+paid upgrade, new repository or production migration was created. Preserve
+the current code and private Drive authority while resolving this gate.
+
+The R$0 software-testing basis is a public repository using standard GitHub-hosted
 runners, no retained artifacts/cache, no paid model provider and no user PC.
 [GitHub billing documentation](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 states that standard public-repository runners are free and larger runners are
