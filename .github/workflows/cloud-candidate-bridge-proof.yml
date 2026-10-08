@@ -1,0 +1,65 @@
+name: Synthetic cloud candidate bridge proof
+
+on:
+  push:
+    branches: [stage21-cloud-semantic-proof]
+    paths:
+      - "scripts/cloud_candidate_bridge_smoke.py"
+      - "tests/test_cloud_candidate_bridge_smoke.py"
+      - "src/file_evidence_candidate_bridge.py"
+      - "src/pinned_cpu_inference.py"
+      - ".github/workflows/cloud-candidate-bridge-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-synthetic-cloud-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      OLLAMA_HOST: 127.0.0.1:11434
+      OLLAMA_NO_CLOUD: '1'
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      CUDA_VISIBLE_DEVICES: '-1'
+    steps:
+      - name: Checkout synthetic bridge proof code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify runtime and exercise real candidate bridge with synthetic evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_cloud_candidate_bridge_smoke.py -v
+          python3 -m unittest discover -s tests -p test_pinned_cpu_inference.py -v
+          proof_dir="${RUNNER_TEMP}/tl-cloud-proof"
+          mkdir -p "$proof_dir/runtime" "$proof_dir/models"
+          server_pid=''
+          cleanup() {
+            if [ -n "$server_pid" ]; then kill "$server_pid" 2>/dev/null || true; fi
+            rm -rf "$proof_dir"
+          }
+          trap cleanup EXIT
+          curl --fail --location --silent --show-error --max-time 240 \
+            https://github.com/ollama/ollama/releases/download/v0.40.0/ollama-linux-amd64.tar.zst \
+            --output "$proof_dir/runtime.tar.zst"
+          echo 'c94aa4156b3d13e64ebc2efe5ea53f015384c882be776e6695cfb37fb180d5ad  '"$proof_dir/runtime.tar.zst" | sha256sum --check --status
+          tar --zstd -xf "$proof_dir/runtime.tar.zst" -C "$proof_dir/runtime"
+          rm "$proof_dir/runtime.tar.zst"
+          export OLLAMA_MODELS="$proof_dir/models"
+          "$proof_dir/runtime/bin/ollama" serve > "$proof_dir/server.log" 2>&1 &
+          server_pid=$!
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:11434/api/version > /dev/null; then ready=true; break; fi
+            sleep 1
+          done
+          test "$ready" = true
+          timeout 240 "$proof_dir/runtime/bin/ollama" pull qwen3.5:9b > "$proof_dir/pull.log" 2>&1
+          python3 scripts/cloud_candidate_bridge_smoke.py --workspace "$proof_dir/workspace"
