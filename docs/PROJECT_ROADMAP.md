@@ -32,7 +32,7 @@ remains the authority for source media, processing state and canonical records.
   The earlier Arm VM suggestion is an unqualified alternative, not a deployment
   decision or a new user obligation.
   Real-file intake remains disabled; these draft changes are not deployed.
-  Raw-file synthetic integration now passes twelve local cases with real
+  Raw-file synthetic integration now passes twelve local and CI cases with real
   PDF/XML/spreadsheet decoding, image/video OCR and the actual candidate/receipt
   boundary; source probes/model replies remain stubs. See
   `STAGE21_MULTIMODAL_PROOF.md` for scope and remote verification status.

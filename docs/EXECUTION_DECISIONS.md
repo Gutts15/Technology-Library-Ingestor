@@ -62,7 +62,7 @@ one on existing approved resources. A small orchestrator alone, a model smoke
 PASS or a scheduled prompt does not close that gap. This is a recorded blocker,
 not a new cloud-account obligation or a proof that every alternative is impossible.
 
-Independent raw-file integration has progressed: twelve local cases now connect
+Independent raw-file integration has progressed: twelve local and CI cases connect
 real decoders/OCR to the actual evidence/candidate boundary. The model/source
 stubs and remaining live/private/speech gaps are recorded in
 `STAGE21_MULTIMODAL_PROOF.md`.

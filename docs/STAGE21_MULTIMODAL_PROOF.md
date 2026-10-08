@@ -1,7 +1,10 @@
 # Stage 21 — Synthetic raw-file integration proof
 
 Checkpoint: 2026-10-08. Local result: 12/12 PASS, 13.683 seconds.
-Remote CI result must be recorded after it completes. Stage 21: IN_PROGRESS.
+Remote result: 12/12 PASS, 4.031 seconds, in completed successful
+[run 37847159751](https://github.com/Gutts15/Technology-Library-Ingestor/actions/runs/37847159751)
+at `ff75420d9d8cd0fcc1e9cfe23e66bd668a8099bc`. All job steps, including clean
+workspace verification, succeeded. Stage 21: IN_PROGRESS.
 
 `tests/test_multimodal_evidence_integration.py` creates temporary synthetic raw
 files, invokes the real ingestion CLIs and follows their compact evidence through
@@ -27,6 +30,19 @@ logs or envelopes, and no canonical directory. Eight positive cases check one
 candidate and repeat idempotency; four negative cases check zero source/model
 calls and zero candidates. Fixtures and output live in a temporary directory and
 are automatically removed. No media bytes are committed or uploaded as artifacts.
+
+The complete 79,305-character CI job log was checked for the source-name,
+provider-ID and source-text canaries, private Drive URLs, high-confidence
+credentials/private keys, email and personal Windows-path patterns. No checked
+matches were found. The run has zero artifacts. This covers this synthetic job
+only; it does not prove privacy of future real-file processing.
+
+Related local verification passed 54 contract/evidence/transport/preparation
+tests, in addition to the twelve raw-file integration cases. The privacy gate
+passed on 278 tracked files; cost guardrail passed on 170 checked files with zero
+violations. Alignment passed with Charter 1.0, zero routine human steps and
+black-box NOT_RUN. The tested tree was matched to the published tree before
+local history reconciliation. Main and production schedules remain unchanged.
 
 ## Limits
 
