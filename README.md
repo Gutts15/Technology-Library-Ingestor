@@ -42,3 +42,7 @@ evidence qualification and the draft cloud-model proof still require broader
 acceptance and a verified permitted R$0 production executor. Real-file intake
 remains disabled. The overall project remains IN_PROGRESS; the Charter's
 500-item black-box acceptance test is NOT_RUN.
+
+The execution baseline remains the existing private Drive and GitHub project.
+No Oracle account or replacement cloud provider is an approved prerequisite;
+see [execution decisions](docs/EXECUTION_DECISIONS.md) before resuming work.

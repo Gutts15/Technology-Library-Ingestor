@@ -26,9 +26,16 @@ remains the authority for source media, processing state and canonical records.
   actual multimodal/private integration and full pipeline acceptance remain open.
   See `STAGE21_CLOUD_PROOF.md`.
   Provider terms/limits are assessed in `STAGE21_PRODUCTION_EXECUTOR.md`:
-  GitHub Actions remains a development-test executor; an Always Free Arm VM
-  is the first compatibility target, not a qualified production deployment.
+  GitHub Actions remains a development-test executor. Resume with the existing
+  Drive/GitHub baseline assessment in `EXECUTION_DECISIONS.md`; no Oracle
+  account or replacement cloud provider is an approved prerequisite.
+  The earlier Arm VM suggestion is an unqualified alternative, not a deployment
+  decision or a new user obligation.
   Real-file intake remains disabled; these draft changes are not deployed.
+  Raw-file synthetic integration now passes twelve local cases with real
+  PDF/XML/spreadsheet decoding, image/video OCR and the actual candidate/receipt
+  boundary; source probes/model replies remain stubs. See
+  `STAGE21_MULTIMODAL_PROOF.md` for scope and remote verification status.
 - Stages 22–26: complete automatic relevance decisions,
   consolidation, safe canonical promotion, retrieval and bounded operation at
   R$0 mandatory additional recurring cost.
@@ -37,3 +44,8 @@ remains the authority for source media, processing state and canonical records.
 
 No normal operation may require item-by-item review, an always-on user PC or
 manual publication approval. The black-box acceptance test is NOT_RUN.
+
+Next: verify the uncovered production capability against existing resources,
+preserve the current code and complete independent multimodal integration
+checks. Do not provision a replacement provider or revise the Charter by
+inference from this roadmap.

@@ -29,6 +29,24 @@ If technical documentation, roadmap history, memory, prior agent output or imple
 - Low-confidence information should fail closed into machine-managed states such as HELD; HELD must not silently become a user work queue.
 - Prefer reversible, auditable automation: evidence gates, deterministic policy, snapshots, recovery and quarantine.
 
+## Execution premise correction — 2026-10-08
+
+The original execution baseline was private Google Drive plus the existing
+GitHub automation repository at zero mandatory additional recurring cost.
+No Oracle account, replacement cloud provider or migration is an approved
+prerequisite. Read `docs/EXECUTION_DECISIONS.md` before resuming executor work.
+
+Evaluate existing resources first. Separate a verified provider limitation
+from an engineering inference and an untested alternative. Do not present a
+provider candidate as a user obligation. The Charter's initial-setup exception
+does not authorize imposing an unapproved provider/account dependency.
+
+Preserve the existing code, private storage authority and frozen acceptance
+criteria. If the baseline cannot meet them, record the exact uncovered
+capability and a tested alternative before proposing a material dependency
+change. Continue independent work; do not declare the project complete or
+activate real intake from subsystem test results.
+
 ## Alignment Gate
 
 At every top-level stage boundary and before a release, explicitly verify:

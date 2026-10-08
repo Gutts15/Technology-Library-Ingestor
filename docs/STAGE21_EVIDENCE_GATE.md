@@ -33,8 +33,11 @@ their later gates. Existing completed candidate receipts remain idempotent.
 
 Subject matching is a conservative identity check, not proof that every claim
 or summary is correct. Unsupported aliases may be held automatically. The
-separate cloud-model qualification and permitted R$0 production-executor gates
-in `STAGE21_CLOUD_PROOF.md` remain unresolved; real intake stays fixture-only.
+bounded textual cloud-model qualification and five-case synthetic live bridge
+proof in `STAGE21_CLOUD_PROOF.md` now pass. Actual multimodal/private integration
+and a permitted R$0 production executor remain unresolved; real intake stays
+fixture-only. No additional cloud account is an approved prerequisite; see
+`EXECUTION_DECISIONS.md`.
 
 Acceptance uses synthetic fixtures covering empty content across kinds, usable
 text, low/unknown/malformed speech signals, mixed OCR/speech, changed assessment
