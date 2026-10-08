@@ -17,8 +17,9 @@ temporary runtime and model directory. It has no daily schedule or main trigger.
 - Current experimental Qwen3.5 9B GGUF manifest SHA-256:
   `56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90`.
 - Loopback server only; Ollama cloud disabled; no paid API or remote inference.
-- Serial concurrency, 20-minute qualification-job ceiling, four serial benchmark
-  batches of at most five cases, each with a 480-second ceiling including preload, and
+- Serial concurrency, six fixed qualification jobs (two original and four holdout
+  windows), each with a 20-minute ceiling and exactly one batch of five cases.
+  Each batch has a 480-second ceiling including preload, and
   bounded response size. This is not a change to daily intake/session limits.
 - Only synthetic evidence and synthetic public-source excerpts. No raw model
   response, source text or rationale is printed or retained; diagnostics use
@@ -30,6 +31,14 @@ Runtime and model metadata are verified against their official distributions:
 [Qwen model card/license](https://huggingface.co/Qwen/Qwen3.5-9B).
 
 ## Observed results and corrections
+
+The next bounded qualification reruns both frozen suites after a generic prompt
+clarification: missing technical evidence (bookmarks, bare names or marketing)
+is distinct from evidence of an accidental personal upload. Expected outcomes,
+input digests, model identity and transport limits remain unchanged. Each window
+now runs in a separate ephemeral job, serially, so earlier windows cannot consume
+the last window's job budget. Every window must pass; no aggregate success is
+claimed while any case is failed, skipped, cancelled or unverified.
 
 | Run | Scope | Result |
 | --- | --- | --- |

@@ -7,6 +7,8 @@ on:
       - "scripts/cloud_semantic_smoke.py"
       - "scripts/cloud_semantic_holdouts.py"
       - "tests/test_cloud_semantic_holdouts.py"
+      - "src/file_evidence_candidate_bridge.py"
+      - "tests/test_cloud_semantic_smoke.py"
       - "src/evidence_subject_selection.py"
       - "tests/test_evidence_subject_selection.py"
       - ".github/workflows/cloud-semantic-proof.yml"
@@ -20,6 +22,18 @@ concurrency:
 
 jobs:
   proof:
+    name: Proof ${{ matrix.suite }} ${{ matrix.start }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - {suite: original, start: 0}
+          - {suite: original, start: 5}
+          - {suite: holdouts, start: 0}
+          - {suite: holdouts, start: 5}
+          - {suite: holdouts, start: 10}
+          - {suite: holdouts, start: 15}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -28,6 +42,8 @@ jobs:
       OLLAMA_NUM_PARALLEL: '1'
       OLLAMA_MAX_LOADED_MODELS: '1'
       CUDA_VISIBLE_DEVICES: '-1'
+      PROOF_SUITE: ${{ matrix.suite }}
+      PROOF_START: ${{ matrix.start }}
     steps:
       - name: Checkout synthetic proof code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -64,12 +80,4 @@ jobs:
           done
           test "$ready" = true
           timeout 240 "$proof_dir/runtime/bin/ollama" pull qwen3.5:9b > "$proof_dir/pull.log" 2>&1
-          failed_batches=0
-          for start in 0 5 10 15; do
-            result=0
-            python3 scripts/cloud_semantic_smoke.py --suite holdouts --start "$start" --count 5 || result=$?
-            echo "cloud_semantic_batch suite=holdouts start=$start exit=$result"
-            if [ "$result" != 0 ]; then failed_batches=$((failed_batches + 1)); fi
-          done
-          echo "cloud_semantic_batches suite=holdouts failed=$failed_batches"
-          test "$failed_batches" = 0
+          python3 scripts/cloud_semantic_smoke.py --suite "$PROOF_SUITE" --start "$PROOF_START" --count 5
