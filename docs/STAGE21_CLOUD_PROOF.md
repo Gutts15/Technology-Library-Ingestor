@@ -117,6 +117,18 @@ had zero artifacts. These were synthetic software checks, not private intake.
 
 ## Independent expanded acceptance (INCOMPLETE)
 
+The 2026-10-08 continuation strengthens the candidate bridge with independent
+subject checks for public-source content and usable extracted file text. It
+preserves the experimental pinned CPU transport, default model, frozen suites
+and historical qualification verdicts. Synthetic boundary checks now reject
+unrelated source/file subjects, URL-only file samples, metadata-only matches and
+blocked-speech matches without creating a candidate. Existing receipts remain
+idempotent. Fresh local verification passed 32 unit/integration tests plus four
+standalone bridge/planning smoke scripts, security, alignment and cost gates.
+These tests use synthetic model responses; no new live-model accuracy run or
+production activation is claimed. The expanded acceptance below remains
+INCOMPLETE, and the production-executor gate remains NOT_VERIFIED.
+
 After the ten-case viability PASS, twenty new synthetic textual cases were
 defined before running the unchanged model and combined prompt. Their
 canonical JSON SHA-256 (sorted keys, compact separators, UTF-8 without ASCII

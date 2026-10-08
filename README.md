@@ -37,5 +37,8 @@ public, and the bounded post-publication private-storage canary passed in
 with zero artifacts and no private values found in its public logs. The private Drive
 and its contents remain outside this repository.
 
-Next is Stage 20 — Zero-touch Drive intake. The overall project remains
-IN_PROGRESS; the Charter's 500-item black-box acceptance test is NOT_RUN.
+Stage 20 is DONE for fixture-only zero-touch intake. Stage 21 is IN_PROGRESS:
+evidence qualification and the draft cloud-model proof still require broader
+acceptance and a verified permitted R$0 production executor. Real-file intake
+remains disabled. The overall project remains IN_PROGRESS; the Charter's
+500-item black-box acceptance test is NOT_RUN.

@@ -27,7 +27,7 @@ from typing import Any
 from candidate_queue import validate_candidate
 from candidate_source_probe import extract_urls, fetch_one, normalize_url
 from candidate_validator import normalize_title
-from evidence_quality import assess_evidence, usable_summary
+from evidence_quality import assess_evidence, extracted_text, usable_summary
 from file_evidence_semantic_plan import build_model_response_schema, build_prompt, envelope_binding, validate_model_payload
 from ready_evidence_bridge import read_json_bytes, semantic_summary
 from pinned_cpu_inference import MODEL as CPU_MODEL, infer as infer_pinned_cpu
@@ -403,12 +403,16 @@ def run(
         proposals = reviewed["candidates"]
         if len(proposals) != 1 or proposals[0]["proposed_type"] not in {"TECHNOLOGY", "PATTERN", "PIPELINE"}:
             return "held", "ambiguous_or_noncanonical"
-        support_text = (
-            json.dumps(binding["semantic_summary"], ensure_ascii=False)
-            + " " + source["url"] + " " + source["excerpt"]
-        )
-        if not subject_supported(proposals[0]["title"], support_text):
-            return "held", "subject_not_in_evidence"
+        title = proposals[0]["title"]
+        if not subject_supported(title, source["excerpt"]):
+            return "held", "subject_not_in_public_source"
+        # For a link the fetched page is the evidence. Other media must also
+        # identify the subject in their usable extracted content; a URL,
+        # metadata or blocked speech cannot substitute for that evidence.
+        if binding["kind"] != "link" and not subject_supported(
+            title, extracted_text(binding["kind"], binding["semantic_summary"]),
+        ):
+            return "held", "subject_not_in_file_evidence"
         candidate_raw, error = render_candidate(item, proposals[0], source, datetime.now(timezone.utc).date().isoformat())
         if error or candidate_raw is None:
             return "held", error or "candidate_contract_invalid"

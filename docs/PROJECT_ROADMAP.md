@@ -16,8 +16,13 @@ remains the authority for source media, processing state and canonical records.
   exposure.
 - Stage 21: IN_PROGRESS — synthetic FFmpeg scene-sampling validation passed;
   the automatic candidate boundary now assesses extracted evidence by media
-  kind and holds empty or weak-only content. See `STAGE21_EVIDENCE_GATE.md`.
-  Real-file intake remains disabled.
+  kind and holds empty or weak-only content. Candidate subjects must match
+  verified source content and usable file text independently. See
+  `STAGE21_EVIDENCE_GATE.md`. The draft cloud qualification passed its initial
+  ten cases, but expanded acceptance remains INCOMPLETE (17 PASS, one
+  disposition mismatch, two interrupted/unverified cases). A permitted R$0
+  production executor remains NOT_VERIFIED. See `STAGE21_CLOUD_PROOF.md`.
+  Real-file intake remains disabled; these draft changes are not deployed.
 - Stages 22–26: complete automatic relevance decisions,
   consolidation, safe canonical promotion, retrieval and bounded operation at
   R$0 mandatory additional recurring cost.

@@ -161,7 +161,7 @@ def test_fail_closed() -> None:
         invented["candidates"][0]["title"] = "Invented Platform"
         with patch("file_evidence_candidate_bridge.fetch_one", side_effect=fetched_source), \
              patch("file_evidence_candidate_bridge.call_local_model", return_value=invented):
-            assert run(storage, PACKAGE, 8) == ("held", "subject_not_in_evidence")
+            assert run(storage, PACKAGE, 8) == ("held", "subject_not_in_public_source")
         assert not (root / "99_INBOX/CANDIDATES/CHAT_RESEARCH").exists()
         raw_path = root / expected_evidence_path(PACKAGE)
         raw_path.write_bytes(raw_path.read_bytes() + b" ")
