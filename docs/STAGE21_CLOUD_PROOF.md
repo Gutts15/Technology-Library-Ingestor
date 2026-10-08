@@ -37,7 +37,7 @@ The next bounded qualification reruns both frozen suites after a generic prompt
 clarification: missing technical evidence (bookmarks, bare names or marketing)
 is distinct from evidence of an accidental personal upload. Expected outcomes,
 input digests, model identity and transport limits remain unchanged. Each window
-now runs in a separate ephemeral job, serially, so earlier windows cannot consume
+now runs in a separate ephemeral job, so earlier windows cannot consume
 the last window's job budget. Every window must pass; no aggregate success is
 claimed while any case is failed, skipped, cancelled or unverified.
 
@@ -51,6 +51,23 @@ token-limit truncation before parsing; only fixed reason codes are logged. The
 experimental production transport also holds explicitly truncated responses,
 even if a prefix happens to parse as JSON. The full frozen suites rerun after
 the prompt change; the CSV failure's precise cause is not yet established.
+
+The concise-output follow-up resolved the CSV JSON failure, but useful input
+again timed out on the first chat in each useful-content window. This is an
+observed startup pattern, not proof of its cause. A shared, optional startup
+self-test now sends empty synthetic evidence through the same pinned transport,
+schema and production prompt structure. It must return no candidate and an
+insufficient-evidence disposition before readiness is established. It never uses
+benchmark facts or private input, writes no records, and has a 90-second ceiling.
+The semantic benchmark counts this preparation inside its existing 480-second
+total; inference limits and frozen expectations stay unchanged. Both proof
+workflows use the same preparation. This helper is not wired into the daily
+production worker or the legacy default model.
+
+The shared concurrency group uses `queue: max` with cancellation disabled so
+one proof cannot discard another pending proof. This preserves serialized
+workflow runs and at most two independent benchmark VMs per run. There is no
+scheduled inference or automatic retry loop.
 
 | Run | Scope | Result |
 | --- | --- | --- |

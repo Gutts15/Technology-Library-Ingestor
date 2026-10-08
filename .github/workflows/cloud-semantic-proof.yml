@@ -9,6 +9,8 @@ on:
       - "tests/test_cloud_semantic_holdouts.py"
       - "src/file_evidence_candidate_bridge.py"
       - "tests/test_cloud_semantic_smoke.py"
+      - "src/pinned_cpu_prepare.py"
+      - "tests/test_pinned_cpu_prepare.py"
       - "src/evidence_subject_selection.py"
       - "tests/test_evidence_subject_selection.py"
       - ".github/workflows/cloud-semantic-proof.yml"
@@ -19,6 +21,7 @@ permissions:
 concurrency:
   group: technology-library-synthetic-cloud-proof
   cancel-in-progress: false
+  queue: max
 
 jobs:
   proof:
@@ -56,6 +59,7 @@ jobs:
           python3 -m unittest discover -s tests -p test_cloud_semantic_smoke.py -v
           python3 -m unittest discover -s tests -p test_evidence_subject_selection.py -v
           python3 -m unittest discover -s tests -p test_cloud_semantic_holdouts.py -v
+          python3 -m unittest discover -s tests -p test_pinned_cpu_prepare.py -v
           proof_dir="${RUNNER_TEMP}/tl-cloud-proof"
           mkdir -p "$proof_dir/runtime" "$proof_dir/models"
           server_pid=''

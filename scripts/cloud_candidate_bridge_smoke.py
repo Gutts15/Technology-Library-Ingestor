@@ -21,7 +21,8 @@ sys.path.insert(0, str(ROOT / 'tests'))
 from file_evidence_candidate_bridge import Storage, run
 from file_evidence_semantic_plan import build_plan
 from pinned_cpu_inference import infer as live_infer
-from scripts.cloud_semantic_smoke import MODEL, cases, check_result, request_json
+from pinned_cpu_prepare import prepare
+from scripts.cloud_semantic_smoke import cases, check_result
 from test_file_evidence_candidate_bridge import PACKAGE, URL, fixture
 
 
@@ -76,10 +77,7 @@ def main():
         return 2
     args.workspace.mkdir(parents=True, exist_ok=True)
     try:
-        warm = request_json('http://127.0.0.1:11434', '/api/generate', {
-            'model': MODEL, 'prompt': '', 'stream': False, 'keep_alive': '10m',
-            'options': {'num_ctx': 4096, 'num_gpu': 0, 'num_thread': 4}}, timeout=90)
-        if warm.get('done') is not True:
+        if not prepare(90):
             raise ValueError('warmup_incomplete')
     except Exception:
         print('cloud_candidate_bridge_error code=model_warmup_failed')

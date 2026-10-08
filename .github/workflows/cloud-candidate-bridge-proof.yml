@@ -8,6 +8,8 @@ on:
       - "tests/test_cloud_candidate_bridge_smoke.py"
       - "src/file_evidence_candidate_bridge.py"
       - "src/pinned_cpu_inference.py"
+      - "src/pinned_cpu_prepare.py"
+      - "tests/test_pinned_cpu_prepare.py"
       - ".github/workflows/cloud-candidate-bridge-proof.yml"
 
 permissions:
@@ -16,6 +18,7 @@ permissions:
 concurrency:
   group: technology-library-synthetic-cloud-proof
   cancel-in-progress: false
+  queue: max
 
 jobs:
   proof:
@@ -38,6 +41,7 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tests -p test_cloud_candidate_bridge_smoke.py -v
           python3 -m unittest discover -s tests -p test_pinned_cpu_inference.py -v
+          python3 -m unittest discover -s tests -p test_pinned_cpu_prepare.py -v
           proof_dir="${RUNNER_TEMP}/tl-cloud-proof"
           mkdir -p "$proof_dir/runtime" "$proof_dir/models"
           server_pid=''

@@ -142,11 +142,8 @@ def main() -> int:
         return 2
     started = time.monotonic()
     try:
-        warm = request_json(args.endpoint, "/api/generate", {
-            "model": MODEL, "prompt": "", "stream": False, "keep_alive": "10m",
-            "options": {"num_ctx": 4096, "num_gpu": 0, "num_thread": 4},
-        }, timeout=90)
-        if warm.get("done") is not True:
+        from pinned_cpu_prepare import prepare
+        if not prepare(min(90, MAX_TOTAL_SECONDS), endpoint=args.endpoint):
             raise ValueError("warmup_incomplete")
     except Exception:
         print("cloud_semantic_smoke_error code=model_warmup_failed")
