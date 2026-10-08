@@ -21,7 +21,12 @@ remains the authority for source media, processing state and canonical records.
   `STAGE21_EVIDENCE_GATE.md`. The draft cloud qualification passed its initial
   ten cases, but expanded acceptance remains INCOMPLETE (17 PASS, one
   disposition mismatch, two interrupted/unverified cases). A permitted R$0
-  production executor remains NOT_VERIFIED. See `STAGE21_CLOUD_PROOF.md`.
+  production executor remains NOT_VERIFIED. The new qualification runs each
+  frozen five-case window separately and reruns both suites after clarifying
+  missing evidence versus accidental input. See `STAGE21_CLOUD_PROOF.md`.
+  Provider terms/limits are assessed in `STAGE21_PRODUCTION_EXECUTOR.md`:
+  GitHub Actions remains a development-test executor; an Always Free Arm VM
+  is the first compatibility target, not a qualified production deployment.
   Real-file intake remains disabled; these draft changes are not deployed.
 - Stages 22–26: complete automatic relevance decisions,
   consolidation, safe canonical promotion, retrieval and bounded operation at
