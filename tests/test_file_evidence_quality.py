@@ -14,6 +14,56 @@ from test_file_evidence_candidate_bridge import PACKAGE, URL, fetched_source, fi
 
 
 class EvidenceQualityTests(unittest.TestCase):
+    def test_candidate_subject_must_appear_in_verified_source_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture(root, kind="document", evidence={"samples": ["Public Tool workflow engine"]})
+            source = {**fetched_source(), "excerpt": "Another Engine is an unrelated product."}
+            with patch("file_evidence_candidate_bridge.fetch_one", return_value=source), \
+                 patch("file_evidence_candidate_bridge.call_local_model", return_value=model_response()):
+                self.assertEqual(run(Storage(root=root), PACKAGE, 8, URL),
+                                 ("held", "subject_not_in_public_source"))
+            self.assertFalse((root / "99_INBOX/CANDIDATES/CHAT_RESEARCH").exists())
+
+    def test_candidate_subject_must_appear_in_usable_file_text(self):
+        for kind, evidence, quality in (
+            ("image", {"ocr_sample": "Another Engine"}, None),
+            ("document", {"samples": ["Another Engine"]}, None),
+            ("text", {"samples": [URL]}, None),
+            ("spreadsheet", {"row_samples": [["Another Engine", "workflow"]]}, None),
+            ("audio", {"speech": [{"text": "Another Engine"}]}, {"transcript": {"signal": "high"}}),
+            ("video", {"ocr": [{"text": "Another Engine"}], "speech": [{"text": "Public Tool"}]},
+             {"transcript": {"signal": "low"}}),
+        ):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fixture(root, kind=kind, evidence=evidence, quality=quality)
+                with patch("file_evidence_candidate_bridge.fetch_one", side_effect=fetched_source), \
+                     patch("file_evidence_candidate_bridge.call_local_model", return_value=model_response()):
+                    self.assertEqual(run(Storage(root=root), PACKAGE, 8, URL),
+                                     ("held", "subject_not_in_file_evidence"))
+                self.assertFalse((root / "99_INBOX/CANDIDATES/CHAT_RESEARCH").exists())
+
+    def test_link_without_extracted_samples_can_use_verified_public_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture(root, kind="link", evidence={})
+            with patch("file_evidence_candidate_bridge.fetch_one", side_effect=fetched_source), \
+                 patch("file_evidence_candidate_bridge.call_local_model", return_value=model_response()):
+                self.assertEqual(run(Storage(root=root), PACKAGE, 8), ("created", "candidate_created"))
+
+    def test_channel_metadata_cannot_establish_subject_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture(root, kind="video", evidence={
+                "ocr": [{"text": "Another Engine", "description": "Public Tool"}],
+                "speech": [],
+            })
+            with patch("file_evidence_candidate_bridge.fetch_one", side_effect=fetched_source), \
+                 patch("file_evidence_candidate_bridge.call_local_model", return_value=model_response()):
+                self.assertEqual(run(Storage(root=root), PACKAGE, 8, URL),
+                                 ("held", "subject_not_in_file_evidence"))
+
     def test_empty_extracted_content_never_calls_network_or_model(self):
         for kind, evidence in (
             ("image", {"ocr_sample": ""}),

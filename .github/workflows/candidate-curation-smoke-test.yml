@@ -72,6 +72,7 @@ on:
       - "tests/test_candidate_editorial_gate.py"
       - "tests/test_candidate_record_template.py"
       - "tests/test_candidate_finalize_helpers.py"
+      - "tests/test_candidate_daily_cycle.py"
       - "tests/test_candidate_batch_inspect.py"
       - "tests/test_candidate_batch_editorial_acceptance.py"
       - "tests/test_candidate_hold_inspect.py"
@@ -149,6 +150,7 @@ jobs:
           python3 tests/test_candidate_editorial_gate.py
           python3 tests/test_candidate_record_template.py
           python3 tests/test_candidate_finalize_helpers.py
+          python3 tests/test_candidate_daily_cycle.py
           python3 tests/test_candidate_batch_inspect.py
           python3 tests/test_candidate_batch_editorial_acceptance.py
           python3 tests/test_candidate_hold_inspect.py
