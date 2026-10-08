@@ -31,6 +31,12 @@ remains the authority for source media, processing state and canonical records.
   account or replacement cloud provider is an approved prerequisite.
   The earlier Arm VM suggestion is an unqualified alternative, not a deployment
   decision or a new user obligation.
+  Native scheduled runtime/private writes now pass a bounded existing-resource
+  probe, and native ChatGPT passes the same thirty textual criteria. The actual
+  native-response candidate integration passes 30 cases (14 creations, 16 holds),
+  with source fetches still synthetic. Its optional SHA-bound transport and the
+  single-candidate daily mode are tested; see `STAGE21_NATIVE_EXECUTOR_PROOF.md`.
+  Full Drive app storage, automatic promotion and daily-flow acceptance remain open.
   Real-file intake remains disabled; these draft changes are not deployed.
   Raw-file synthetic integration now passes twelve local and CI cases with real
   PDF/XML/spreadsheet decoding, image/video OCR and the actual candidate/receipt

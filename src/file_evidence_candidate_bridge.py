@@ -2,8 +2,10 @@
 """Create one private chat-research candidate from one bound FILE_EVIDENCE item.
 
 The legacy default is loopback Ollama gpt-oss:20b. An explicit experimental
-opt-in uses pinned CPU inference. Public URLs are probed before the model is
-called. No path in this module targets 00_LIBRARY for writing.
+opt-in uses pinned CPU inference. A separate explicit native exchange binds
+scheduled ChatGPT responses to current evidence, schema and source bytes.
+Public URLs are probed before any model transport. No path in this module
+targets 00_LIBRARY for writing.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from evidence_quality import assess_evidence, extracted_text, usable_summary
 from file_evidence_semantic_plan import build_model_response_schema, build_prompt, envelope_binding, validate_model_payload
 from ready_evidence_bridge import read_json_bytes, semantic_summary
 from pinned_cpu_inference import MODEL as CPU_MODEL, infer as infer_pinned_cpu
+from native_model_exchange import BACKEND as NATIVE_BACKEND, NativeExchange, NativeExchangeError
 
 MODEL = "gpt-oss:20b"
 ENDPOINT = "http://127.0.0.1:11434"
@@ -357,7 +360,10 @@ def run(
     explicit_source_url: str | None = None,
     *,
     pinned_cpu: bool = False,
+    native_exchange: NativeExchange | None = None,
 ) -> tuple[str, str]:
+    if pinned_cpu and native_exchange is not None:
+        return "held", "inference_modes_conflict"
     index = safe_json(storage.read(f"{FILE_ROOT}/index.json"), MAX_INDEX_BYTES)
     item, error = select_item(index, package_id)
     if error or item is None:
@@ -401,8 +407,17 @@ def run(
             return "held", error or "public_source_unverified"
         prompt = build_automatic_prompt(binding, source)
         model_timeout = min(max(timeout, 10.0), 600.0)
-        model_payload = (infer_pinned_cpu(prompt, AUTOMATIC_MODEL_RESPONSE_SCHEMA, model_timeout)
-                         if pinned_cpu else call_local_model(prompt, model_timeout))
+        if native_exchange is not None:
+            context = {key: binding[key] for key in
+                       ("package_id", "revision_key", "envelope_id", "evidence_summary_sha256", "kind")}
+            context.update(source_url=source["url"], source_sha256=source["sha256"])
+            try:
+                model_payload = native_exchange.infer(prompt, AUTOMATIC_MODEL_RESPONSE_SCHEMA, context)
+            except NativeExchangeError as error:
+                return "held", str(error)
+        else:
+            model_payload = (infer_pinned_cpu(prompt, AUTOMATIC_MODEL_RESPONSE_SCHEMA, model_timeout)
+                             if pinned_cpu else call_local_model(prompt, model_timeout))
         reviewed, errors = validate_model_payload(model_payload, "")
         if errors or reviewed is None:
             return "held", model_contract_reason(errors)
@@ -449,14 +464,26 @@ def main() -> int:
     parser.add_argument("--package-id", help="Exact active package; omit to select the first indexed package.")
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--source-url", help="Explicit public provenance URL; it is normalized and fetched before model use.")
-    parser.add_argument("--pinned-cpu-model", action="store_true",
+    inference = parser.add_mutually_exclusive_group()
+    inference.add_argument("--pinned-cpu-model", action="store_true",
                         help="Explicit experimental pinned CPU model; does not enable real intake or publication.")
+    inference.add_argument("--prepare-native-request", type=Path,
+                           help="Write a private bound request for scheduled ChatGPT; creates no candidate.")
+    inference.add_argument("--native-response", type=Path,
+                           help="Consume a private native response bound to the current source and evidence.")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.package_id is not None and not ID_RE.fullmatch(args.package_id):
         parser.error("--package-id must be a 20-character lowercase hex ID")
     if args.report is not None and any(part.upper() == "00_LIBRARY" for part in args.report.parts):
         parser.error("--report cannot target 00_LIBRARY")
+    native_exchange = None
+    if args.prepare_native_request is not None or args.native_response is not None:
+        try:
+            native_exchange = NativeExchange(request_path=args.prepare_native_request,
+                                             response_path=args.native_response)
+        except ValueError:
+            parser.error("native exchange cannot target 00_LIBRARY")
     if args.remote and not shutil.which("rclone"):
         outcome, reason = "held", "rclone_missing"
     else:
@@ -466,10 +493,12 @@ def main() -> int:
             args.timeout,
             args.source_url,
             pinned_cpu=args.pinned_cpu_model,
+            native_exchange=native_exchange,
         )
     report = {"schema_version": 1, "stage": "16B", "outcome": outcome, "reason_code": reason,
               "candidate_write": int(outcome == "created"), "canonical_write": 0,
-              "model": CPU_MODEL if args.pinned_cpu_model else MODEL, "paid_model": 0}
+              "model": NATIVE_BACKEND if native_exchange else (CPU_MODEL if args.pinned_cpu_model else MODEL),
+              "paid_model": 0}
     if args.report:
         try:
             args.report.parent.mkdir(parents=True, exist_ok=True)

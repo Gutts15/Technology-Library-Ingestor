@@ -45,6 +45,19 @@ representative daily-flow end-to-end acceptance test is NOT_RUN. There is no
 minimum upload count: one file can be processed and an empty day is a no-op.
 A 500-input stress experiment is optional, not a release requirement.
 
+The candidate cycle now has an explicit `--daily` mode: one eligible candidate
+is due immediately, with the existing validation and bounded batch ceiling.
+It does not use the manual `--force-semantic` bypass. The legacy adaptive mode
+remains available. This prepares daily curation selection; it does not enable
+real scheduled intake or connect canonical publication.
+
 The execution baseline remains the existing private Drive and GitHub project.
 No Oracle account or replacement cloud provider is an approved prerequisite;
 see [execution decisions](docs/EXECUTION_DECISIONS.md) before resuming work.
+
+An isolated native scheduled ChatGPT probe now demonstrates background Python,
+private Drive read/write and native analysis against the frozen textual cases.
+The optional SHA-bound native response exchange passes the real candidate
+boundary on synthetic storage/source fixtures. It does not change model defaults
+or enable canonical writes. See [native executor evidence](docs/STAGE21_NATIVE_EXECUTOR_PROOF.md)
+for proven capabilities and remaining end-to-end gates.

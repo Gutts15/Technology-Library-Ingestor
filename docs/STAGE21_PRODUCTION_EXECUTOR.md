@@ -19,6 +19,11 @@ qualified or connected. No paid plan, trial-dependent resource or automatic
 upgrade is part of this decision. The initial-setup exception in the Charter
 must not be used to infer approval of an additional provider dependency.
 
+A later existing-resource experiment now demonstrates native scheduled Python,
+private Drive read/write and bounded native semantic behavior. See
+`STAGE21_NATIVE_EXECUTOR_PROOF.md`; full production integration remains partial.
+Evaluate that existing connection before any conditional new-provider checklist.
+
 ## Verified provider facts and remaining gaps
 
 | Option | Facts checked in official documentation | Project assessment |

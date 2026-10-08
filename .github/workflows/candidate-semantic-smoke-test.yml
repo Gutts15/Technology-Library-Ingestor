@@ -17,6 +17,8 @@ on:
       - "src/file_evidence_semantic_plan.py"
       - "src/file_evidence_semantic_batch.py"
       - "src/file_evidence_candidate_bridge.py"
+      - "src/native_model_exchange.py"
+      - "scripts/native_semantic_bridge_probe.py"
       - "src/pinned_cpu_inference.py"
       - "src/stage16b_real_item.py"
       - "src/rclone_bridge.py"
@@ -32,6 +34,7 @@ on:
       - "tests/test_file_evidence_semantic_plan.py"
       - "tests/test_file_evidence_semantic_batch.py"
       - "tests/test_file_evidence_candidate_bridge.py"
+      - "tests/test_native_model_exchange.py"
       - "tests/test_file_evidence_quality.py"
       - "tests/test_pinned_cpu_inference.py"
       - "tests/test_pinned_cpu_candidate_bridge.py"
@@ -215,6 +218,9 @@ jobs:
 
       - name: Validate production file-evidence candidate bridge
         run: python3 tests/test_file_evidence_candidate_bridge.py
+
+      - name: Validate explicit native response binding and fail-closed behavior
+        run: python3 tests/test_native_model_exchange.py
 
       - name: Validate automatic evidence availability gate
         run: python3 -m unittest discover -s tests -p test_file_evidence_quality.py -v

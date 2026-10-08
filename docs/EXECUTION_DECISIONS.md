@@ -54,14 +54,15 @@ capacity or persistent permission in another execution context.
 | Private Drive and existing repository | Storage and reusable worker code already exist; bounded synthetic decoding/model tests pass. | ADOPT NOW; preserve source/state and code. Storage is not proof of an execution host. |
 | GitHub-hosted Actions | Associated software development/testing is supported; free public-runner billing does not settle production use. | ADOPT NOW for bounded CI; routine private processing remains unqualified. Do not re-label product operation as a test. |
 | Apps Script in the Google ecosystem | Consumer quotas: 6 minutes/execution, 90 minutes/day for triggers, 50 MB per URL Fetch response. V8 is a managed JavaScript environment, not standard Node.js. | TEST FIRST only for a small orchestration role. Engineering inference: it cannot directly run the current Python/FFmpeg/Ollama worker. No script was created or deployed. |
-| Native ChatGPT scheduling/connected apps | Official documentation supports eligible recurring tasks/apps, but external writes may pause for approval and tasks cannot access uploaded/project files. Session tool availability does not prove the full pipeline. | NOT_QUALIFIED; no task was created, no background write permission or media executor is assumed. It must not silently introduce Work-session dependence or human approvals. |
+| Native ChatGPT scheduling/connected apps | An isolated one-time background task ran Python, passed 24 SHA-bound code tests, and wrote/read a private Drive result without approval. FFmpeg/Tesseract were available; rclone/loopback inference were absent. Actual native responses passed the frozen 30-case textual criteria. | PARTIAL proof on existing resources; TEST FIRST. No foreground Work session or new provider was needed. A native candidate exchange is now tested, but automatic private canonical operation is not qualified. See `STAGE21_NATIVE_EXECUTOR_PROOF.md`. |
 
-The uncovered capability is an allowed unattended execution path for actual
-media extraction, grounded semantic decisions and private reversible writes,
-within the same budget and recovery contract. This review has not demonstrated
-one on existing approved resources. A small orchestrator alone, a model smoke
-PASS or a scheduled prompt does not close that gap. This is a recorded blocker,
-not a new cloud-account obligation or a proof that every alternative is impossible.
+The earlier capability assessment is superseded in part by actual background
+runtime/private-write and native semantic evidence. Existing resources now
+demonstrate a promising unattended execution path. Its full integration still
+needs a bounded Drive app storage port, actual public-source and media checks,
+automatic canonical policy, coordination, durable recovery and scheduled
+end-to-end index/retrieval acceptance. A scheduled component PASS does not close
+those gaps or justify a new cloud-account obligation.
 
 Independent raw-file integration has progressed: twelve local and CI cases connect
 real decoders/OCR to the actual evidence/candidate boundary. The model/source
@@ -100,6 +101,25 @@ schedules remain unchanged; this is work on the existing draft branch.
 
 ## Alignment
 
+Daily selection continuation: `candidate_local_cycle.py --daily` removes the
+legacy five-candidate/30-day wait for eligible daily work. It still uses the
+validator-backed planner, the requested bounded batch ceiling and exact decision
+batch matching; empty days do not launch semantic work. The legacy adaptive mode
+is unchanged. Six CLI regression cases and the existing finalizer-helper smoke
+passed locally. This is not automatic canonical promotion or production deployment.
+
+The isolated background runtime probe passed 24 tests and verified private
+read/write. Native scheduled ChatGPT analysis passed all thirty unchanged
+textual cases. Actual stored responses then passed the real candidate boundary
+locally: 14 creations, 16 automatic holds and 14 repeat/idempotency checks.
+The new explicit native transport passed seven regression cases and preserves
+source/evidence/response binding, default model behavior and fail-closed gates.
+The integrated focused suite passed 37 tests. Public-source fetches in the
+candidate integration remain stubs; no private canonical write was tested.
+See `STAGE21_NATIVE_EXECUTOR_PROOF.md` for scope, exact packet hashes and the
+rework assessment. The one-time task completed disabled. Production scheduling
+and the actual intake remain disabled until the remaining integration passes.
+
 ALIGNMENT: PASS for this documentation correction and bounded synthetic work.
 CHARTER_VERSION: 1.1. NEW_ROUTINE_USER_STEPS: 0.
 NEW_MANDATORY_RECURRING_COST: R$0. USER_PC_DEPENDENCY: no.
@@ -108,7 +128,7 @@ BLACK_BOX_STATUS: NOT_RUN. This is not overall project acceptance.
 ## References
 
 - `PROJECT_CHARTER.md`, `PROJECT_CONTRACT.json`, `PROJECT_ROADMAP.md`
-- `STAGE21_CLOUD_PROOF.md`, `STAGE21_PRODUCTION_EXECUTOR.md`
+- `STAGE21_CLOUD_PROOF.md`, `STAGE21_PRODUCTION_EXECUTOR.md`, `STAGE21_NATIVE_EXECUTOR_PROOF.md`
 - [GitHub Actions additional terms](https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features#actions)
 - [Apps Script quotas](https://developers.google.com/apps-script/guides/services/quotas)
 - [Apps Script V8 runtime](https://developers.google.com/apps-script/guides/v8-runtime)

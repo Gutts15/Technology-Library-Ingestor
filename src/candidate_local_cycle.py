@@ -13,6 +13,8 @@ no candidate canonical publication step here.
 
 Use --force-semantic only for an explicit/manual review such as validating the
 first small candidate batch before adaptive volume/age thresholds are reached.
+Use --daily for unattended daily selection: even one eligible candidate is due,
+without bypassing validation or the bounded batch ceiling.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from typing import Any
 
 from candidate_batch_plan import build_plan
 
-CYCLE_VERSION = "0.2.0"
+CYCLE_VERSION = "0.3.0"
 DEFAULT_ROOT = "99_INBOX/CANDIDATES"
 DEFAULT_INDEX = "index.json"
 DEFAULT_PROPOSALS = "validation-proposals.json"
@@ -212,7 +214,13 @@ def main() -> int:
     parser.add_argument("--volume-threshold", type=int, default=DEFAULT_VOLUME_THRESHOLD)
     parser.add_argument("--max-wait-days", type=int, default=DEFAULT_MAX_WAIT_DAYS)
     parser.add_argument("--max-batch", type=int, default=DEFAULT_MAX_BATCH)
-    parser.add_argument(
+    selection_mode = parser.add_mutually_exclusive_group()
+    selection_mode.add_argument(
+        "--daily",
+        action="store_true",
+        help="Process eligible daily work even with one item; preserve validation and batch limits.",
+    )
+    selection_mode.add_argument(
         "--force-semantic",
         action="store_true",
         help="Explicit manual test: review READY_FOR_SEMANTIC candidates now instead of waiting for adaptive thresholds.",
@@ -223,7 +231,7 @@ def main() -> int:
         print("candidate_local_cycle_error stage=preflight code=rclone_missing canonical_write=0")
         return 2
 
-    volume_threshold = max(1, min(int(args.volume_threshold), 1000))
+    volume_threshold = 1 if args.daily else max(1, min(int(args.volume_threshold), 1000))
     max_wait_days = max(1, min(int(args.max_wait_days), 3650))
     max_batch = max(1, min(int(args.max_batch), 20))
     python_exe = sys.executable or "python3"
