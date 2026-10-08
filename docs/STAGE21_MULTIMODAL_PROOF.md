@@ -51,7 +51,7 @@ The test establishes actual decoding and wiring through the candidate/storage
 boundary; it does not qualify model accuracy on these extracted inputs. The
 separate frozen 30-case model and five-case live bridge proofs remain valid within
 their own scope. No speech transcription, private Drive integration, actual
-public-source retrieval, automatic canonical publication, recovery or 500-input
+public-source retrieval, automatic canonical publication, recovery or representative daily-flow
 acceptance is implied by this test. The tiny clean fixtures are not a capacity or
 malformed/large-file robustness proof.
 

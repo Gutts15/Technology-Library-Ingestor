@@ -28,6 +28,7 @@ If technical documentation, roadmap history, memory, prior agent output or imple
 - A subsystem/core release may be complete while the overall North Star remains incomplete.
 - Low-confidence information should fail closed into machine-managed states such as HELD; HELD must not silently become a user work queue.
 - Prefer reversible, auditable automation: evidence gates, deterministic policy, snapshots, recovery and quarantine.
+- Charter 1.1 uses representative daily-flow acceptance; 500 inputs is an optional stress example, never a required user dataset or minimum processing threshold.
 
 ## Execution premise correction — 2026-10-08
 

@@ -1,8 +1,8 @@
 # Technology Library — Project Charter
 
-CHARTER_VERSION: 1.0  
+CHARTER_VERSION: 1.1
 STATUS: ACTIVE  
-LAST_UPDATED: 2026-09-23
+LAST_UPDATED: 2026-10-08
 
 ## North Star
 
@@ -16,11 +16,26 @@ Interesting technical information arrives in messy formats and is easy to lose, 
 
 ## Black-box success test
 
-A mixed backlog of 500 realistic inputs is placed in the private Drive inbox, including useful sources, duplicates, irrelevant files, accidental uploads, weak evidence, contradictory claims and malformed/unsupported items.
+Validate the actual unattended daily flow with representative inputs across
+small batches and successive cycles. Include an empty inbox, a single useful
+item, and mixed useful sources, duplicates, irrelevant files, accidental uploads,
+weak evidence, contradictory claims and malformed/unsupported items. Exercise
+ordinary interruption and automatic resumption, supported media extraction,
+canonical publication, index rebuilding and selective retrieval.
+
+There is no minimum upload count before a daily run. An empty day is a no-op;
+one eligible file is sufficient for processing. Larger backlogs use the existing
+bounded resumable workers, not a mandatory accumulated dataset. Test material
+may be prepared by the system; the user must not gather a bulk acceptance corpus.
+
+The example of 500 inputs is an optional load/stress experiment for timing and
+capacity. It is not a release gate, an ordinary processing threshold, or work
+the user must supply. Scheduled real-flow acceptance remains required; synthetic
+component tests alone do not establish the complete user experience.
 
 Without the user triggering processing, reviewing candidates, approving batches, keeping a PC on or manually publishing records, the system must:
 
-1. detect the backlog automatically;
+1. detect eligible inputs automatically on the daily cycle, including a single item;
 2. process it in bounded resumable batches;
 3. classify each item into an appropriate automatic disposition;
 4. extract grounded evidence from useful material;
@@ -35,6 +50,15 @@ Without the user triggering processing, reviewing candidates, approving batches,
 13. require R$ 0 mandatory additional recurring cost under the intended normal operating mode.
 
 The project is not complete until this black-box test passes.
+
+## Acceptance revision — 2026-10-08
+
+The user clarified that 500 inputs was an example and should not require
+collecting a large backlog. Version 1.1 replaces that mandatory count with
+representative daily-flow end-to-end acceptance. Daily automation, evidence
+quality, privacy, zero additional recurring cost, no personal-PC dependence and
+no routine human approvals remain unchanged. Large-volume stress testing is
+optional and may use generated fixtures without involving the user.
 
 ## User must not have to
 

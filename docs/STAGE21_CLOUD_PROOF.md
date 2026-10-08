@@ -105,7 +105,7 @@ The suite additionally tests unfamiliar technical subjects, Portuguese noise,
 incidental household sequences and Portuguese contradictions. A passing result
 is only a bounded viability proof. It cannot establish production accuracy,
 ground every possible claim, validate multimodal extraction, consolidation,
-canonical transactions or the Charter's 500-item acceptance test. Those require
+canonical transactions or the Charter's representative daily-flow acceptance test. Those require
 separate evidence before real input can be enabled.
 
 HELD/NEEDS_REVIEW remains machine-managed, never routine user review.

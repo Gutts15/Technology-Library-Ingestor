@@ -1,6 +1,6 @@
 {
   "project": "Technology Library",
-  "charter_version": "1.0",
+  "charter_version": "1.1",
   "project_status": "IN_PROGRESS",
   "core_release": "Technology-Library-Ingestor v1.0.0",
   "north_star": "Drop interesting material into the private Drive inbox and walk away; the system autonomously filters, processes, consolidates, safely promotes and indexes useful knowledge for later retrieval.",
@@ -35,7 +35,24 @@
     "automatic index rebuild and verification",
     "automatic ordinary failure recovery",
     "selective retrieval of resulting knowledge",
-    "500-item mixed-backlog black-box acceptance pass",
+    "representative daily-flow end-to-end acceptance pass",
     "zero routine manual validation"
-  ]
+  ],
+  "acceptance_policy": {
+    "mode": "representative_daily_flow",
+    "minimum_items_to_run": 0,
+    "user_supplied_bulk_dataset_required": false,
+    "stress_test_required": false,
+    "required_scenarios": [
+      "scheduled_empty_noop",
+      "scheduled_single_useful_item",
+      "mixed_small_batches",
+      "duplicates_and_noise",
+      "weak_and_conflicting_evidence",
+      "malformed_or_unsupported_input",
+      "automatic_canonical_index_and_retrieval",
+      "ordinary_interruption_resume",
+      "privacy_and_zero_cost"
+    ]
+  }
 }

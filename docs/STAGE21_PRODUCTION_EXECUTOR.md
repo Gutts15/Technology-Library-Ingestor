@@ -67,8 +67,10 @@ The current first step is the existing-resource assessment in
    processing state. Retain authoritative state in private Drive; no artificial
    load to evade an idle policy, PC dependency or manual per-item work queue.
 7. Only after these checks, integrate the bounded daily worker and run the
-   original end-to-end acceptance. A provider comparison, model smoke or free
-   account alone cannot satisfy the Charter's 500-item black-box test.
+   representative scheduled daily-flow acceptance, including empty and single-item
+   cycles and interruption recovery. A provider comparison, model smoke or free
+   account alone cannot satisfy the Charter's end-to-end test. A 500-item load
+   test is optional and must not become a user-supplied dataset requirement.
 
 ## Official sources
 

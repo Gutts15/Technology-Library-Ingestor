@@ -41,7 +41,9 @@ Stage 20 is DONE for fixture-only zero-touch intake. Stage 21 is IN_PROGRESS:
 evidence qualification and the draft cloud-model proof still require broader
 acceptance and a verified permitted R$0 production executor. Real-file intake
 remains disabled. The overall project remains IN_PROGRESS; the Charter's
-500-item black-box acceptance test is NOT_RUN.
+representative daily-flow end-to-end acceptance test is NOT_RUN. There is no
+minimum upload count: one file can be processed and an empty day is a no-op.
+A 500-input stress experiment is optional, not a release requirement.
 
 The execution baseline remains the existing private Drive and GitHub project.
 No Oracle account or replacement cloud provider is an approved prerequisite;

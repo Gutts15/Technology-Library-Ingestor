@@ -1,6 +1,6 @@
 # Execution decisions and resume checkpoint
 
-Updated: 2026-10-08. Charter: 1.0, unchanged. Project: IN_PROGRESS.
+Updated: 2026-10-08. Charter: 1.1; daily-flow acceptance clarified by the user. Project: IN_PROGRESS.
 
 ## Original contract and user clarification
 
@@ -10,7 +10,8 @@ impact on other projects. Normal operation must remain free of mandatory
 additional recurring cost, paid inference fallback, personal-PC dependence,
 Work-session dependence and recurring human review/publication approval.
 Private input, extracted content, credentials and processing state remain private.
-The Charter's 500-input end-to-end acceptance remains the completion criterion.
+The current completion criterion is representative scheduled daily-flow acceptance.
+The earlier 500-input example is optional load testing, not a required user dataset.
 
 On 2026-10-08 the user challenged a request for an Oracle account because it
 introduced a dependency absent from the initial plan. The correction was
@@ -34,7 +35,7 @@ or that an unqualified existing resource satisfies the product contract.
 | GitHub Actions for software development/testing | ADOPT NOW | Continue bounded synthetic CI. Free public runner billing does not establish permission for a routine private processing service. |
 | Original baseline for full unattended private processing | NOT_VERIFIED | See the existing-resource review below; full unattended private execution is still unqualified. |
 | Oracle or another replacement provider | UNAPPROVED / UNQUALIFIED | Reference alternatives only; no signup, provisioning, trial budget or migration is authorized by a candidate comparison. |
-| Real intake, canonical promotion and 500-input acceptance | NOT_RUN end to end | Keep real scheduled intake disabled; do not declare the project complete. |
+| Real intake, canonical promotion and daily-flow acceptance | NOT_RUN end to end | Keep real scheduled intake disabled; do not declare the project complete. |
 
 The GitHub terms themselves and the assessment of this particular pipeline are
 different evidence levels. The terms restrict hosted Actions use to software
@@ -69,6 +70,15 @@ stubs and remaining live/private/speech gaps are recorded in
 
 ## Resume order
 
+Acceptance clarification, 2026-10-08: the user explained that 500 items were an
+example, not an expected daily backlog. Charter 1.1 therefore replaces the fixed
+bulk count with representative scheduled daily-flow acceptance. An empty inbox
+is a successful no-op; a single eligible item must be processed. Test small mixed
+batches, automatic canonical/index/retrieval behavior and ordinary recovery.
+The system may prepare synthetic fixtures; do not ask the user to collect 500
+items. A larger load/timing experiment remains optional. This changes the test
+volume, not the automation, quality, privacy or zero-cost requirements.
+
 1. Read Charter, contract, this checkpoint and roadmap. Reconfirm cost,
    privacy, automation and dependency constraints before structural changes.
 2. Review existing Drive/GitHub capabilities and limits against the actual
@@ -82,7 +92,7 @@ stubs and remaining live/private/speech gaps are recorded in
    new dependency. Do not silently adopt it or transfer speculative setup work
    to the user.
 5. Integrate a qualified allowed execution path, then private canary, automatic
-   publication/index/retrieval/recovery and finally the original 500-input test.
+   publication/index/retrieval/recovery and finally representative scheduled daily-flow acceptance.
 
 No actual provider deployment is qualified. No new account, subscription,
 resource or migration was created by this correction. Main and production
@@ -91,7 +101,7 @@ schedules remain unchanged; this is work on the existing draft branch.
 ## Alignment
 
 ALIGNMENT: PASS for this documentation correction and bounded synthetic work.
-CHARTER_VERSION: 1.0. NEW_ROUTINE_USER_STEPS: 0.
+CHARTER_VERSION: 1.1. NEW_ROUTINE_USER_STEPS: 0.
 NEW_MANDATORY_RECURRING_COST: R$0. USER_PC_DEPENDENCY: no.
 BLACK_BOX_STATUS: NOT_RUN. This is not overall project acceptance.
 
