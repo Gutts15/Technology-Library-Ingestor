@@ -282,7 +282,9 @@ def build_automatic_prompt(binding: dict[str, Any], source: dict[str, str]) -> s
           "or pipeline name that appears "
           "verbatim in the verified public source; do not expand it into a descriptive marketing title. "
           "If source and file evidence do not clearly support one reusable subject, choose NEEDS_REVIEW "
-          "or NO_REUSABLE_KNOWLEDGE. Never propose SOURCE or multiple candidates.\n"
+          "or NO_REUSABLE_KNOWLEDGE. Never propose SOURCE or multiple candidates. "
+          "Keep rationale under 20 words and summary under 30 words. Keep claims concise and atomic, "
+          "preserving all directly supported core capabilities; avoid repeating facts across fields.\n"
     )
 
 

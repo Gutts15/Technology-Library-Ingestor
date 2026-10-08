@@ -124,6 +124,12 @@ class PinnedTransportTests(unittest.TestCase):
                 self.assertIsNone(infer('synthetic_sensitive_marker', {}, 5, endpoint=self.endpoint))
                 self.chat[field] = original
 
+    def test_token_limit_response_is_held_even_when_prefix_is_valid_json(self):
+        self.chat['done_reason'] = 'length'
+        with redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(infer('synthetic_sensitive_marker', {}, 5, endpoint=self.endpoint))
+        self.assertEqual(output.getvalue(), '')
+
     def test_oversized_or_invalid_payload_is_rejected_without_output(self):
         for content in ('x' * (64 * 1024 + 1), 'invalid JSON', '[]'):
             self.chat['message']['content'] = content

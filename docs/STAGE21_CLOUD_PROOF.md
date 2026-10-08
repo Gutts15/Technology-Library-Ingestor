@@ -17,9 +17,10 @@ temporary runtime and model directory. It has no daily schedule or main trigger.
 - Current experimental Qwen3.5 9B GGUF manifest SHA-256:
   `56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90`.
 - Loopback server only; Ollama cloud disabled; no paid API or remote inference.
-- Serial concurrency, six fixed qualification jobs (two original and four holdout
+- Workflow runs are serialized; six fixed qualification jobs (two original and four holdout
   windows), each with a 20-minute ceiling and exactly one batch of five cases.
-  Each batch has a 480-second ceiling including preload, and
+  At most two independent synthetic jobs run concurrently, on separate ephemeral
+  VMs; inference within each job stays serial. Each batch has a 480-second ceiling including preload, and
   bounded response size. This is not a change to daily intake/session limits.
 - Only synthetic evidence and synthetic public-source excerpts. No raw model
   response, source text or rationale is printed or retained; diagnostics use
@@ -39,6 +40,17 @@ input digests, model identity and transport limits remain unchanged. Each window
 now runs in a separate ephemeral job, serially, so earlier windows cannot consume
 the last window's job budget. Every window must pass; no aggregate success is
 claimed while any case is failed, skipped, cancelled or unverified.
+
+Run 37765753645 resolved the confirmed URL-only disposition mismatch, but its
+first original window timed out on useful English input and an independent CSV
+case returned invalid JSON. These failures are not approvals. A follow-up
+clarifies concise rationale/summary fields while preserving all directly
+supported core claims, without increasing time or token budgets. The harness
+now rejects mismatched model identities, incomplete responses and explicit
+token-limit truncation before parsing; only fixed reason codes are logged. The
+experimental production transport also holds explicitly truncated responses,
+even if a prefix happens to parse as JSON. The full frozen suites rerun after
+the prompt change; the CSV failure's precise cause is not yet established.
 
 | Run | Scope | Result |
 | --- | --- | --- |

@@ -2,13 +2,36 @@
 
 import unittest
 import io
+import json
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from scripts.cloud_semantic_smoke import cases, check_result, build_automatic_prompt, main
+from scripts.cloud_semantic_smoke import (MODEL, ModelResponseError, cases, check_result,
+                                        build_automatic_prompt, decode_model_response, main)
 
 
 class CloudProofContractTests(unittest.TestCase):
+    def test_completed_response_preserves_payload(self):
+        payload = {"outcome": "NO_REUSABLE_KNOWLEDGE", "candidates": []}
+        response = {"model": MODEL, "done": True, "done_reason": "stop",
+                    "message": {"content": json.dumps(payload)}}
+        self.assertEqual(decode_model_response(response), payload)
+
+    def test_truncated_or_wrong_model_response_cannot_pass_even_with_valid_json(self):
+        base = {"model": MODEL, "done": True,
+                "message": {"content": '{"outcome":"NO_REUSABLE_KNOWLEDGE"}'}}
+        for fields, reason in (({"model": "another-model"}, "model_response_identity_mismatch"),
+                               ({"done": False}, "model_response_incomplete"),
+                               ({"done_reason": "length"}, "model_response_truncated")):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ModelResponseError, '^'+reason+'$'):
+                decode_model_response({**base, **fields})
+
+    def test_invalid_content_reports_only_fixed_codes(self):
+        for content, reason in (("SYNTHETIC_CONTENT_SENTINEL", "model_json_invalid"),
+                                ("[]", "model_response_invalid"), (None, "model_response_invalid")):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ModelResponseError, '^'+reason+'$'):
+                decode_model_response({"model": MODEL, "done": True, "message": {"content": content}})
+
     def test_invalid_case_windows_stop_before_model_access(self):
         for start, count in ((-1, 5), (0, 0), (0, 6), (9, 2)):
             with self.subTest(start=start, count=count), patch("sys.argv",

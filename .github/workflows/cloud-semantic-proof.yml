@@ -25,7 +25,7 @@ jobs:
     name: Proof ${{ matrix.suite }} ${{ matrix.start }}
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         include:
           - {suite: original, start: 0}
