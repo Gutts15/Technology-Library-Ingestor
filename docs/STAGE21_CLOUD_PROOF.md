@@ -5,6 +5,13 @@ tests model viability without the user PC; it does not establish eligibility
 to host routine production processing, replace the
 production model or authorize canonical promotion.
 
+Latest bounded checkpoint: run 37771236861 at
+`9e37453cffeeba01b239978d3e66454a72b04a4f` passed all ten original and twenty
+independent frozen textual cases. Run 37771236894 at the same code checkpoint
+passed all five live-model synthetic candidate-bridge cases. Full case coverage,
+job conclusions and unchanged time ceilings were independently checked.
+Production executor qualification and private end-to-end acceptance remain open.
+
 The branch-scoped `cloud-semantic-proof.yml` runs CPU inference on a standard
 ephemeral GitHub Actions runner. It has no Drive access or repository secrets,
 uses read-only repository permission, publishes no artifacts, and deletes its
@@ -82,6 +89,11 @@ scheduled inference or automatic retry loop.
 | 37564889059 | Two-step prototype, named-quote instruction aligned | 6/10 passed in 120 seconds; two useful selections remained unbound and two other useful cases were HELD. Not qualified. |
 | 37565477280 | Qwen3.5 9B, combined production prompt, unchanged ten cases | 10/10 passed: two serial five-case batches in 147 and 136 seconds, including preload. Bounded viability PASS; not full production qualification. |
 | 37566524224 | Same pinned model and prompt, twenty frozen independent holdouts | 17 PASS, one confirmed disposition mismatch, two UNVERIFIED extraction failures during job cancellation at the 20-minute ceiling. Expanded acceptance INCOMPLETE; not qualified. |
+| 37765753645 | Missing-evidence clarification; both frozen suites in isolated windows | 28 PASS, useful English timeout and CSV JSON failure UNVERIFIED. All three earlier pending negative cases passed. Not qualified. |
+| 37769186617 | Concise explanations and strict reply integrity checks | 26 PASS, four useful first-chat timeouts UNVERIFIED. CSV JSON failure resolved. Not qualified. |
+| 37769829487 | Actual opt-in bridge with empty-prompt preload | 4/5 PASS; useful English did not produce a valid response/candidate. Not qualified. |
+| 37771236861 | Shared empty-evidence startup preparation; full unchanged suites | 30/30 PASS, including all fourteen useful and sixteen negative cases. Every five-case window fits 480 seconds including preparation. Bounded textual acceptance PASS, not production qualification. |
+| 37771236894 | Same prepared model through actual opt-in bridge | 5/5 PASS: four useful candidates preserve subjects/core facts and repeat idempotently; conflict held; no Drive or canonical writes. Bounded synthetic integration PASS. |
 
 The production prompt's unconditional instruction to propose exactly one
 candidate was replaced by disposition-first, conditional extraction. The same
@@ -106,10 +118,11 @@ suite without changing any expected outcome: all four useful cases produced
 the expected subject, and all six negative/conflict cases produced no candidate.
 This resolves the bounded no-user-PC viability gate, not the full quality gate.
 
-The independent evidence/claim benchmark below did not qualify. Its confirmed
-disposition mismatch and two interrupted cases must be resolved without relaxing
-the frozen acceptance. A permitted R$0 production executor must also be verified
-before private automatic integration and end-to-end synthetic acceptance.
+The independent evidence/claim benchmark now passes all twenty frozen cases;
+the original ten-case regression and five-case synthetic live bridge also pass.
+This resolves the bounded textual acceptance and prototype storage/transport
+integration gates. A permitted R$0 production executor must still be verified
+before private automatic integration and end-to-end acceptance.
 It must preserve the free normal path, private execution inputs and logs,
 conservative handling of noise/conflicts, and useful-content recall. A passing
 model smoke alone does not complete Stage 21 or the full automatic pipeline.
@@ -153,7 +166,7 @@ The five additional runs at commit
 complete job logs passed the same deterministic pattern checks; all five runs
 had zero artifacts. These were synthetic software checks, not private intake.
 
-## Independent expanded acceptance (INCOMPLETE)
+## Independent expanded acceptance (bounded textual PASS)
 
 The 2026-10-08 continuation strengthens the candidate bridge with independent
 subject checks for public-source content and usable extracted file text. It
@@ -163,9 +176,11 @@ unrelated source/file subjects, URL-only file samples, metadata-only matches and
 blocked-speech matches without creating a candidate. Existing receipts remain
 idempotent. Fresh local verification passed 32 unit/integration tests plus four
 standalone bridge/planning smoke scripts, security, alignment and cost gates.
-These tests use synthetic model responses; no new live-model accuracy run or
-production activation is claimed. The expanded acceptance below remains
-INCOMPLETE, and the production-executor gate remains NOT_VERIFIED.
+That first boundary checkpoint used synthetic model responses and made no new
+live accuracy claim. Subsequent live results are recorded in the table above.
+Fresh continuation coverage passed 50 unit/transport/integration tests, standalone
+candidate storage and startup-budget smoke checks, security, alignment and cost
+gates. The production-executor gate remains NOT_VERIFIED.
 
 After the ten-case viability PASS, twenty new synthetic textual cases were
 defined before running the unchanged model and combined prompt. Their
@@ -188,7 +203,7 @@ Every negative case must create zero candidates. All twenty must pass; do
 not relax expectations after observing output. Lexical probes only detect the
 specified errors; they do not prove complete semantic grounding.
 
-Run 37566524224 executed four serial five-case batches, preserving the
+Historical interrupted run 37566524224 executed four serial five-case batches, preserving the
 model/runtime pins, inference settings, 20-minute job ceiling, zero artifacts,
 no Drive access and no production/schedule changes. The original ten-case
 suite is retained unchanged and selectable; its prior PASS is not substituted
@@ -200,10 +215,15 @@ frozen `NO_REUSABLE_KNOWLEDGE`/`NEEDS_REVIEW` expectation, with zero candidates.
 This is a confirmed classification mismatch, not an observed private write or
 unsafe candidate. Do not change the expectation to accommodate the observed
 result. `json_injection` and `household_pipeline_pt` returned `extraction_failed`
-immediately before job cancellation; both remain UNVERIFIED, not established
-model accuracy failures. The workflow conclusion was `cancelled`, not success.
-The earlier ten-case PASS remains bounded evidence and cannot override this
-expanded INCOMPLETE result. No additional live inference has been scheduled.
+immediately before job cancellation; both were UNVERIFIED in that attempt,
+not established model accuracy failures. The workflow conclusion was `cancelled`, not success.
+The earlier ten-case PASS did not override that expanded INCOMPLETE result.
+The subsequent corrections reran every frozen case without relaxing expectations.
+Run 37771236861 independently verified exact case coverage and PASS across all
+six windows: original starts 0/5 took 151/344 seconds; independent starts
+0/5/10/15 took 198/411/309/307 seconds, including generic startup preparation.
+No failed, missing, cancelled or unverified case is counted in this PASS.
+These times describe this bounded x86 experiment, not an Arm capacity guarantee.
 
 ## Opt-in private candidate integration (not activated)
 
@@ -227,8 +247,12 @@ through the actual opt-in bridge and ephemeral local fixture storage. It stubs
 only the verified public-source probe with synthetic text; it does not fetch
 real source pages or use Drive. Four useful cases must create exactly one private
 candidate each, repeat without another inference/write, and preserve the source
-subject; one contradiction must be held without a candidate. Live execution
-is pending. No routine schedule or production mode has been enabled.
+subject; one contradiction must be held without a candidate. Live run
+37771236894 passed all five cases at the same prepared code checkpoint as the
+thirty-case benchmark. Exact case coverage and workflow success were checked;
+all four positive cases repeated without another inference or duplicate file.
+This is a synthetic source-probe/local-storage proof, not private Drive or real
+public-page integration. No routine schedule or production mode has been enabled.
 
 ## Production hosting eligibility gate
 
@@ -263,3 +287,12 @@ runners, no retained artifacts/cache, no paid model provider and no user PC.
 [GitHub billing documentation](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 states that standard public-repository runners are free and larger runners are
 charged. No larger runner or paid fallback is authorized by this experiment.
+
+## 2026-10-08 continuation log coverage
+
+Complete logs of all twenty model-proof jobs across runs 37765753645,
+37769186617, 37769829487, 37771236861 and 37771236894 were checked for email,
+private Drive URL, high-confidence credential/private-key and personal Windows
+user-path patterns. Zero checked matches and zero artifacts across the five runs.
+This bounded checked coverage does not prove absence outside those logs or future
+private execution safety. Source text and raw model replies remain unprinted.

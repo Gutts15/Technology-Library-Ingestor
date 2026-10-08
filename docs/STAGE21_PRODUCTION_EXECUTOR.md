@@ -35,8 +35,13 @@ has been verified in an actual production account.
    any configuration relying on expiring trial credits, paid upgrade or resources
    outside the free region/allowance. Card verification, if needed, is an initial
    account-administration step, never routine item review.
-2. Verify the Arm runtime against its own official archive checksum. The tested
-   x86 archive checksum is not evidence for Arm. Verify the model manifest before
+2. Verify downloaded Arm bytes against their own official archive checksum.
+   The v0.40.0 release API checked on 2026-10-08 reports
+   `ollama-linux-arm64.tar.zst` (1,557,877,510 bytes), SHA-256
+   `4d27cb1d8f46176a3c0ce10aea2a16e4ad73dfe1599f2ed13468f29e5b8aba0d`.
+   This is verified expected metadata, not a downloaded-byte or Arm execution
+   PASS. The same API's x86 digest matches the existing qualification pin.
+   Verify the model manifest before
    any prompt; keep inference loopback-only, cloud disabled and no fallback.
 3. Measure model peak RAM and latency with the same frozen original/holdout
    suites. Preserve the 90-second inference deadline, bounded responses and
@@ -64,6 +69,7 @@ Checked on the review date; reverify before provisioning or changing a provider.
   (effective 2026-08-27)
 - [Oracle Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
 - [Oracle Free Tier FAQ](https://www.oracle.com/cloud/free/faq/)
+- [Ollama v0.40.0 official release metadata](https://api.github.com/repos/ollama/ollama/releases/tags/v0.40.0)
 - [Workers AI pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/)
 - [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
 - [Workers AI data usage](https://developers.cloudflare.com/workers-ai/platform/data-usage/)

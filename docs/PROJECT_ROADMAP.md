@@ -18,12 +18,13 @@ remains the authority for source media, processing state and canonical records.
   the automatic candidate boundary now assesses extracted evidence by media
   kind and holds empty or weak-only content. Candidate subjects must match
   verified source content and usable file text independently. See
-  `STAGE21_EVIDENCE_GATE.md`. The draft cloud qualification passed its initial
-  ten cases, but expanded acceptance remains INCOMPLETE (17 PASS, one
-  disposition mismatch, two interrupted/unverified cases). A permitted R$0
-  production executor remains NOT_VERIFIED. The new qualification runs each
-  frozen five-case window separately and reruns both suites after clarifying
-  missing evidence versus accidental input. See `STAGE21_CLOUD_PROOF.md`.
+  `STAGE21_EVIDENCE_GATE.md`. Draft bounded textual acceptance now passes all
+  ten original and twenty independent frozen cases; the actual opt-in bridge
+  passes five synthetic live-model/storage cases, including repeat idempotency
+  and conflict holding. Shared empty-evidence startup preparation fits existing
+  budgets and uses no benchmark facts. A permitted R$0 production executor,
+  actual multimodal/private integration and full pipeline acceptance remain open.
+  See `STAGE21_CLOUD_PROOF.md`.
   Provider terms/limits are assessed in `STAGE21_PRODUCTION_EXECUTOR.md`:
   GitHub Actions remains a development-test executor; an Always Free Arm VM
   is the first compatibility target, not a qualified production deployment.
