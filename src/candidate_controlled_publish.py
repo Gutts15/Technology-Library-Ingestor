@@ -205,10 +205,12 @@ def planned_index_changes(
     return changed, []
 
 
-def _private_write_exact(remote: str, path: str, raw: bytes) -> bool:
+def _private_write_exact(
+    remote: str, path: str, raw: bytes, *, final_path: str | None = None
+) -> bool:
     if not safe_recovery_path(path):
         return False
-    if not remote_copy_bytes(remote, path, raw):
+    if not remote_copy_bytes(remote, path, raw, final_path=final_path):
         return False
     return remote_cat(remote, path) == raw
 
@@ -232,7 +234,7 @@ def canonical_atomic_writer(remote: str, run_root: str):
             / "stage"
             / f"{counter['value']:04d}-{sha256(path.encode('utf-8'))[:20]}.bin"
         )
-        if not _private_write_exact(remote, stage, raw):
+        if not _private_write_exact(remote, stage, raw, final_path=path):
             return False
         moved = run_rclone(
             [

@@ -19,6 +19,7 @@ from rclone_paths import join_remote
 import argparse
 import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -38,6 +39,10 @@ RESULT_NAME = "resume-result.json"
 
 BEFORE_BYTES = b"technology-library-recovery-fixture-before\n"
 AFTER_BYTES = b"technology-library-recovery-fixture-mutated\n"
+
+# Independent built-in tables avoid host registry or mime.types overrides.
+MIME_TYPES = mimetypes.MimeTypes()
+MIME_TYPES.add_type("text/markdown", ".md")
 
 
 def sha256(raw: bytes) -> str:
@@ -71,12 +76,25 @@ def remote_cat(remote_root: str, relative: str) -> bytes | None:
     return bytes(result.stdout)
 
 
-def remote_copy_bytes(remote_root: str, relative: str, raw: bytes) -> bool:
+def remote_copy_bytes(
+    remote_root: str, relative: str, raw: bytes, *, final_path: str | None = None
+) -> bool:
+    # Staged writes must derive MIME from their eventual destination, not .bin.
+    suffix = PurePosixPath(final_path if final_path is not None else relative).suffix.lower()
+    mime_type = (
+        MIME_TYPES.types_map[1].get(suffix)
+        or MIME_TYPES.types_map[0].get(suffix)
+        or "application/octet-stream"
+    )
     with tempfile.TemporaryDirectory(prefix="tl-recovery-upload-") as temp:
         local = Path(temp) / "payload.bin"
         local.write_bytes(raw)
         result = run_rclone(
-            ["copyto", str(local), join_remote(remote_root, relative), "--log-level", "ERROR", "--stats", "0"]
+            [
+                "copyto", str(local), join_remote(remote_root, relative),
+                "--metadata", "--metadata-set", f"content-type={mime_type}",
+                "--log-level", "ERROR", "--stats", "0",
+            ]
         )
         return result.returncode == 0
 
