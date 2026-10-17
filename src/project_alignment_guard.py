@@ -56,6 +56,7 @@ def validate(root: Path = ROOT) -> list[str]:
         "hard_constraints",
         "normal_flow_human_actions_allowed",
         "completion_requires",
+        "acceptance_policy",
     }
     for key in sorted(required_top):
         if key not in contract:
@@ -122,8 +123,35 @@ def validate(root: Path = ROOT) -> list[str]:
         errors.append("agents_scope_change_guard_missing")
 
     completion = contract.get("completion_requires")
-    if not isinstance(completion, list) or "500-item mixed-backlog black-box acceptance pass" not in completion:
+    if not isinstance(completion, list) or "representative daily-flow end-to-end acceptance pass" not in completion:
         errors.append("contract_black_box_completion_requirement_missing")
+    if isinstance(completion, list) and "500-item mixed-backlog black-box acceptance pass" in completion:
+        errors.append("contract_obsolete_bulk_acceptance_requirement")
+
+    policy = contract.get("acceptance_policy")
+    if not isinstance(policy, dict):
+        errors.append("acceptance_policy_invalid")
+    else:
+        for key, expected in {
+            "mode": "representative_daily_flow",
+            "minimum_items_to_run": 0,
+            "user_supplied_bulk_dataset_required": False,
+            "stress_test_required": False,
+        }.items():
+            value = policy.get(key)
+            if type(value) is not type(expected) or value != expected:
+                errors.append(f"acceptance_policy_{key}")
+        required = {
+            "scheduled_empty_noop", "scheduled_single_useful_item", "mixed_small_batches",
+            "duplicates_and_noise", "weak_and_conflicting_evidence", "malformed_or_unsupported_input",
+            "automatic_canonical_index_and_retrieval", "ordinary_interruption_resume",
+            "privacy_and_zero_cost",
+        }
+        scenarios = policy.get("required_scenarios")
+        if not isinstance(scenarios, list) or not all(isinstance(item, str) for item in scenarios):
+            errors.append("acceptance_policy_scenarios_invalid")
+        elif not required.issubset(set(scenarios)):
+            errors.append("acceptance_policy_scenarios_missing")
 
     return sorted(set(errors))
 

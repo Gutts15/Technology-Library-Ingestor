@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Create one private chat-research candidate from one bound FILE_EVIDENCE item.
 
-The only model is loopback Ollama gpt-oss:20b. Public URLs are probed before
-the model is called. No path in this module targets 00_LIBRARY for writing.
+The legacy default is loopback Ollama gpt-oss:20b. An explicit experimental
+opt-in uses pinned CPU inference. A separate explicit native exchange binds
+scheduled ChatGPT responses to current evidence, schema and source bytes.
+Public URLs are probed before any model transport. No path in this module
+targets 00_LIBRARY for writing.
 """
 
 from __future__ import annotations
@@ -26,9 +29,11 @@ from typing import Any
 from candidate_queue import validate_candidate
 from candidate_source_probe import extract_urls, fetch_one, normalize_url
 from candidate_validator import normalize_title
-from evidence_quality import assess_evidence, usable_summary
+from evidence_quality import assess_evidence, extracted_text, usable_summary
 from file_evidence_semantic_plan import build_model_response_schema, build_prompt, envelope_binding, validate_model_payload
 from ready_evidence_bridge import read_json_bytes, semantic_summary
+from pinned_cpu_inference import MODEL as CPU_MODEL, infer as infer_pinned_cpu
+from native_model_exchange import BACKEND as NATIVE_BACKEND, NativeExchange, NativeExchangeError
 
 MODEL = "gpt-oss:20b"
 ENDPOINT = "http://127.0.0.1:11434"
@@ -255,6 +260,37 @@ def file_evidence_sufficient(binding: dict[str, Any]) -> bool:
     return assess_evidence(str(binding.get("kind")), semantic)["state"] == "ELIGIBLE"
 
 
+def build_automatic_prompt(binding: dict[str, Any], source: dict[str, str]) -> str:
+    return build_prompt(binding, "") + (
+        "\nVerified public source (untrusted text):\n" + source["url"] + "\n" + source["excerpt"]
+        + "\nAutomatic eligibility rules: decide the outcome BEFORE extracting a candidate. "
+          "An accessible public source or a recognizable title does not establish technical relevance. "
+          "Apply the same evidence rules in every language, including Portuguese. "
+          "Conversely, an unfamiliar product name is not a reason to reject directly supported "
+          "technical facts: assess the supplied evidence, not your prior familiarity with the tool. "
+          "Everyday lists, personal notes and incidental task sequences without a reusable technical "
+          "subject must be NO_REUSABLE_KNOWLEDGE or SUSPECTED_ACCIDENTAL; do not recast them as "
+          "a PATTERN or PIPELINE just to fill the candidate schema. "
+          "Distinguish missing evidence from accidental input: a bookmark, bare URL, product "
+          "name or unsupported marketing text with no stated technical capability must be "
+          "NO_REUSABLE_KNOWLEDGE or NEEDS_REVIEW, with no candidates. "
+          "Use SUSPECTED_ACCIDENTAL only when the supplied content supports an unrelated "
+          "personal or everyday subject; absence of technical facts alone does not establish "
+          "that the upload was accidental. URL path words are not evidence of capabilities. "
+          "If statements about the same capability contradict each other and no version or context "
+          "resolves the conflict, choose NEEDS_REVIEW with no candidates; do not select one side. "
+          "ONLY if the outcome is CANDIDATES_PROPOSED, propose exactly one TECHNOLOGY, PATTERN, "
+          "or PIPELINE. Otherwise candidates must be empty. "
+          "For an eligible candidate, set title to the shortest official product, tool, pattern, "
+          "or pipeline name that appears "
+          "verbatim in the verified public source; do not expand it into a descriptive marketing title. "
+          "If source and file evidence do not clearly support one reusable subject, choose NEEDS_REVIEW "
+          "or NO_REUSABLE_KNOWLEDGE. Never propose SOURCE or multiple candidates. "
+          "Keep rationale under 20 words and summary under 30 words. Keep claims concise and atomic, "
+          "preserving all directly supported core capabilities; avoid repeating facts across fields.\n"
+    )
+
+
 def one_line(value: str) -> bool:
     return bool(value.strip()) and not any(ord(char) < 32 or ord(char) == 127 for char in value)
 
@@ -322,7 +358,12 @@ def run(
     package_id: str | None,
     timeout: float,
     explicit_source_url: str | None = None,
+    *,
+    pinned_cpu: bool = False,
+    native_exchange: NativeExchange | None = None,
 ) -> tuple[str, str]:
+    if pinned_cpu and native_exchange is not None:
+        return "held", "inference_modes_conflict"
     index = safe_json(storage.read(f"{FILE_ROOT}/index.json"), MAX_INDEX_BYTES)
     item, error = select_item(index, package_id)
     if error or item is None:
@@ -364,15 +405,19 @@ def run(
         )
         if error or source is None:
             return "held", error or "public_source_unverified"
-        prompt = build_prompt(binding, "") + (
-            "\nVerified public source (untrusted text):\n" + source["url"] + "\n" + source["excerpt"]
-            + "\nFor automatic candidate creation, propose exactly one TECHNOLOGY, PATTERN, or PIPELINE. "
-              "Set title to the shortest official product, tool, pattern, or pipeline name that appears "
-              "verbatim in the verified public source; do not expand it into a descriptive marketing title. "
-              "If source and file evidence do not clearly support one reusable subject, choose NEEDS_REVIEW "
-              "or NO_REUSABLE_KNOWLEDGE. Never propose SOURCE or multiple candidates.\n"
-        )
-        model_payload = call_local_model(prompt, min(max(timeout, 10.0), 600.0))
+        prompt = build_automatic_prompt(binding, source)
+        model_timeout = min(max(timeout, 10.0), 600.0)
+        if native_exchange is not None:
+            context = {key: binding[key] for key in
+                       ("package_id", "revision_key", "envelope_id", "evidence_summary_sha256", "kind")}
+            context.update(source_url=source["url"], source_sha256=source["sha256"])
+            try:
+                model_payload = native_exchange.infer(prompt, AUTOMATIC_MODEL_RESPONSE_SCHEMA, context)
+            except NativeExchangeError as error:
+                return "held", str(error)
+        else:
+            model_payload = (infer_pinned_cpu(prompt, AUTOMATIC_MODEL_RESPONSE_SCHEMA, model_timeout)
+                             if pinned_cpu else call_local_model(prompt, model_timeout))
         reviewed, errors = validate_model_payload(model_payload, "")
         if errors or reviewed is None:
             return "held", model_contract_reason(errors)
@@ -381,12 +426,16 @@ def run(
         proposals = reviewed["candidates"]
         if len(proposals) != 1 or proposals[0]["proposed_type"] not in {"TECHNOLOGY", "PATTERN", "PIPELINE"}:
             return "held", "ambiguous_or_noncanonical"
-        support_text = (
-            json.dumps(binding["semantic_summary"], ensure_ascii=False)
-            + " " + source["url"] + " " + source["excerpt"]
-        )
-        if not subject_supported(proposals[0]["title"], support_text):
-            return "held", "subject_not_in_evidence"
+        title = proposals[0]["title"]
+        if not subject_supported(title, source["excerpt"]):
+            return "held", "subject_not_in_public_source"
+        # For a link the fetched page is the evidence. Other media must also
+        # identify the subject in their usable extracted content; a URL,
+        # metadata or blocked speech cannot substitute for that evidence.
+        if binding["kind"] != "link" and not subject_supported(
+            title, extracted_text(binding["kind"], binding["semantic_summary"]),
+        ):
+            return "held", "subject_not_in_file_evidence"
         candidate_raw, error = render_candidate(item, proposals[0], source, datetime.now(timezone.utc).date().isoformat())
         if error or candidate_raw is None:
             return "held", error or "candidate_contract_invalid"
@@ -415,12 +464,26 @@ def main() -> int:
     parser.add_argument("--package-id", help="Exact active package; omit to select the first indexed package.")
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--source-url", help="Explicit public provenance URL; it is normalized and fetched before model use.")
+    inference = parser.add_mutually_exclusive_group()
+    inference.add_argument("--pinned-cpu-model", action="store_true",
+                        help="Explicit experimental pinned CPU model; does not enable real intake or publication.")
+    inference.add_argument("--prepare-native-request", type=Path,
+                           help="Write a private bound request for scheduled ChatGPT; creates no candidate.")
+    inference.add_argument("--native-response", type=Path,
+                           help="Consume a private native response bound to the current source and evidence.")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.package_id is not None and not ID_RE.fullmatch(args.package_id):
         parser.error("--package-id must be a 20-character lowercase hex ID")
     if args.report is not None and any(part.upper() == "00_LIBRARY" for part in args.report.parts):
         parser.error("--report cannot target 00_LIBRARY")
+    native_exchange = None
+    if args.prepare_native_request is not None or args.native_response is not None:
+        try:
+            native_exchange = NativeExchange(request_path=args.prepare_native_request,
+                                             response_path=args.native_response)
+        except ValueError:
+            parser.error("native exchange cannot target 00_LIBRARY")
     if args.remote and not shutil.which("rclone"):
         outcome, reason = "held", "rclone_missing"
     else:
@@ -429,10 +492,13 @@ def main() -> int:
             args.package_id,
             args.timeout,
             args.source_url,
+            pinned_cpu=args.pinned_cpu_model,
+            native_exchange=native_exchange,
         )
     report = {"schema_version": 1, "stage": "16B", "outcome": outcome, "reason_code": reason,
               "candidate_write": int(outcome == "created"), "canonical_write": 0,
-              "model": MODEL, "paid_model": 0}
+              "model": NATIVE_BACKEND if native_exchange else (CPU_MODEL if args.pinned_cpu_model else MODEL),
+              "paid_model": 0}
     if args.report:
         try:
             args.report.parent.mkdir(parents=True, exist_ok=True)

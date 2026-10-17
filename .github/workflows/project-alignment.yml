@@ -19,4 +19,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Validate Charter alignment
-        run: python3 src/project_alignment_guard.py
+        run: |
+          python3 src/project_alignment_guard.py
+          python3 tests/test_project_alignment_guard.py

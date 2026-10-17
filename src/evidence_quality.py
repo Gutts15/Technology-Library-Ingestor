@@ -7,6 +7,7 @@ summaries. Unknown or weak speech cannot support automatic candidates.
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 POLICY_VERSION = "0.1.0"
@@ -92,3 +93,30 @@ def usable_summary(kind: str, semantic: dict[str, Any]) -> dict[str, Any]:
             if channel in evidence
         }
     return result
+
+
+def extracted_text(kind: str, semantic: dict[str, Any]) -> str:
+    """Return only usable extracted text, excluding URLs and channel metadata."""
+    evidence = usable_summary(kind, semantic).get("evidence")
+    if not isinstance(evidence, dict):
+        return ""
+    texts: list[str] = []
+    for channel, value in evidence.items():
+        if channel == "ocr_sample":
+            values = [value]
+        elif not isinstance(value, list):
+            continue
+        elif channel in {"ocr", "speech"}:
+            values = [item.get("text") for item in value if isinstance(item, dict)]
+        elif channel == "row_samples":
+            values = [cell for row in value if isinstance(row, list) for cell in row]
+        elif channel == "samples":
+            values = value
+        else:
+            continue
+        for text in values:
+            if isinstance(text, str):
+                text = re.sub(r"https?://\S+", "", text, flags=re.IGNORECASE).strip()
+                if text:
+                    texts.append(text)
+    return "\n".join(texts)

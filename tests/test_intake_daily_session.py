@@ -32,7 +32,7 @@ class SessionStore(FakeStore):
 
 class DailySessionTests(unittest.TestCase):
     def test_exact_worker_counts_for_requested_backlogs(self) -> None:
-        for count, expected_runs in ((0, 1), (3, 1), (5, 1), (8, 2), (12, 3), (30, 6)):
+        for count, expected_runs in ((0, 1), (1, 1), (3, 1), (5, 1), (8, 2), (12, 3), (30, 6)):
             with self.subTest(count=count):
                 store = SessionStore([item(i) for i in range(count)])
                 runs = 0

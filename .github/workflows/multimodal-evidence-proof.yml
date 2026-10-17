@@ -1,0 +1,45 @@
+name: Synthetic multimodal evidence integration
+
+on:
+  push:
+    branches: [stage21-cloud-semantic-proof]
+    paths:
+      - "tests/test_multimodal_evidence_integration.py"
+      - "src/evidence_quality.py"
+      - "src/evidence_compactor.py"
+      - "src/ready_evidence_bridge.py"
+      - "src/file_evidence_candidate_bridge.py"
+      - "src/text_document_ingest.py"
+      - "src/spreadsheet_ingest.py"
+      - "src/image_ingest.py"
+      - "src/ingest_video.py"
+      - "src/audio_ingest.py"
+      - ".github/workflows/multimodal-evidence-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-synthetic-cloud-proof
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  evidence-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pinned v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install real fixture decoders
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng poppler-utils fonts-dejavu-core
+          python3 -m pip install -r requirements-spreadsheet.txt
+      - name: Verify raw files to evidence and candidate boundary
+        run: python3 tests/test_multimodal_evidence_integration.py
+      - name: Verify no retained fixtures
+        if: always()
+        run: test -z "$(git status --porcelain)"
