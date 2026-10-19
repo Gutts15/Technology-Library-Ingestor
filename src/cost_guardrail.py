@@ -82,6 +82,12 @@ def scan_file(path: Path, root: Path) -> list[str]:
     findings: list[str] = []
     for code, pattern in FORBIDDEN_PATTERNS.items():
         if pattern.search(text):
+            # User-approved specification v1.2.0: isolated free-tier G0.3b only.
+            # Other paths/providers and the generic Google key stay blocked.
+            if (code == "gemini_api_secret"
+                    and relative == Path(".github/workflows/g03b-gemini-receipt.yml")
+                    and not re.search(r"\bGOOGLE_API_KEY\b", text, re.IGNORECASE)):
+                continue
             findings.append(code)
 
     if path.name.startswith("requirements"):
