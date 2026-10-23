@@ -5,7 +5,7 @@ specification. It does not implement ingestion, decisions or publication.
 
 ## Boundaries
 
-- Standard public Actions runner, daily at approximately 12:07 UTC; manual
+- Standard public Actions runner, daily at approximately 08:00 UTC (05:00 Brasília, UTC-3); manual
   dispatch is also available after merge. GitHub may delay scheduled runs.
 - Only `contents: read`; checkout credentials are not persisted. No artifacts.
 - Requires the existing repository secrets `TL_RCLONE_CONFIG` and
