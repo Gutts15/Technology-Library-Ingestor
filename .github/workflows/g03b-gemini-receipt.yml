@@ -1,0 +1,39 @@
+name: G0.3b Gemini receipt
+
+on:
+  schedule:
+    - cron: '7 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One writer across manual, scheduled, and rerun attempts; never cancel a write.
+concurrency:
+  group: technology-library-g03b-gemini-receipt
+  cancel-in-progress: false
+
+jobs:
+  receipt:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install storage client
+        run: |
+          set -euo pipefail
+          if ! sudo apt-get update -qq >/dev/null 2>&1 || ! sudo apt-get install -y -qq rclone >/dev/null 2>&1; then
+            echo 'g03b status=INSTALL_FAILED receipts_written=0'
+            exit 1
+          fi
+
+      - name: Verify isolated daily roundtrip
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 scripts/g03b_gemini_receipt.py
