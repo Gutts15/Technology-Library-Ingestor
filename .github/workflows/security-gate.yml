@@ -48,6 +48,9 @@ jobs:
       - name: Test immutable E1 E3 receipt sidecar reconciliation
         run: python3 -m unittest tests.test_e3_lote_state -q
 
+      - name: Test E3 private immutable write uncertainty and reconciliation
+        run: python3 -m unittest tests.test_e3_private_write -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
