@@ -13,7 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -224,8 +224,9 @@ def prepare(store: Storage, day: str) -> tuple[dict | None, str | None, int]:
             raise PreparationError("lote_limit")
     filename = "lote.json" if number == 1 else f"lote-{number:02d}.json"
     result = {"schema_version": 1, "lote_id": f"{day}-{number:02d}",
+              "created_at_utc": datetime.now(timezone.utc).isoformat(),
               "created_date_brt": day, "status": "PRONTO", "itens": selected}
-    result["lote_sha256"] = hashlib.sha256(encode(result)).hexdigest()
+    # E2 must hash the final serialized lote.json bytes, not a self-referential field.
     if len(encode(result)) > 200 * 1024:
         raise PreparationError("lote_budget")
     return result, LOTES + "/" + day + "/" + filename, held
