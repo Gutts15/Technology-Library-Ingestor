@@ -205,6 +205,32 @@ def planned_index_changes(
     return changed, []
 
 
+def bind_expected_post_hashes(
+    journal: dict[str, Any], transaction: dict[str, Any],
+    record_paths: list[str], read_bytes,
+) -> list[str]:
+    """Seal deterministic expected post-bytes before crossing the write boundary."""
+    _, targets, record_errors = preflight_record_mutations(transaction, read_bytes)
+    if record_errors:
+        return ["expected_record_preflight_failed"]
+    after_paths = post_transaction_record_paths(transaction, record_paths)
+    def read_after(path: str):
+        return targets[path] if path in targets else read_bytes(path)
+    indexes, _, index_errors = build_index_plan(after_paths, read_after)
+    if index_errors or indexes is None:
+        return ["expected_index_preflight_failed"]
+    predicted = dict(targets)
+    predicted.update(indexes)
+    for group, key in (("items", "target_path"), ("indexes", "path")):
+        for item in journal[group]:
+            path = item[key]
+            content = predicted.get(path)
+            if not isinstance(content, bytes):
+                return ["expected_post_content_missing"]
+            item["after_sha256"] = sha256(content)
+    return []
+
+
 def _private_write_exact(
     remote: str, path: str, raw: bytes, *, final_path: str | None = None
 ) -> bool:
@@ -282,6 +308,7 @@ def persist_recovered_and_release(
         read_snapshot=lambda path: remote_cat(remote, path),
         write_canonical=canonical_writer,
         delete_canonical=lambda path: canonical_delete(remote, path),
+        verify_current_state=True,
     )
     if recovery_errors or recovered is None:
         return False, recovery_errors or ["recovery_failed"]
@@ -538,6 +565,12 @@ def main() -> int:
             run_root=run_root,
             before_state=before_state,
         )
+        expected_errors = bind_expected_post_hashes(
+            journal, owned_context["transaction"], owned_paths,
+            lambda path: remote_cat(str(args.remote), path),
+        )
+        if expected_errors:
+            raise RuntimeError(",".join(expected_errors))
         recovery_material_errors = persist_and_verify_recovery(
             remote=str(args.remote),
             journal=journal,
