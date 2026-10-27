@@ -21,7 +21,7 @@ class DriveCommittedContractTests(unittest.TestCase):
     def test_two_item_create_update_have_exact_contract(self):
         lot, decisions = synthetic_two_item_batch(self.case)
         lote = validate_lote(lot, self.case.path)
-        choices = validate_model_output(lote, strict_json(decisions))
+        choices = validate_model_output(lote, {"decisoes": strict_json(decisions)["decisoes"]})
         self.assertEqual([c["acao"] for c in choices], ["CREATE", "UPDATE"])
         plan, staged, paths, settlement = compile_transaction(
             self.case.root, lot, self.case.path, decisions)
