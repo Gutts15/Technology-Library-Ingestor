@@ -297,6 +297,16 @@ def persist_recovered_and_release(
     canonical_writer,
 ) -> tuple[bool, list[str]]:
     errors: list[str] = []
+    # A stale runner must not restore files after another transaction took
+    # ownership. Validate the exact durable coordinator identity FIRST.
+    _, active, ownership_errors = read_coordinator_state(git_remote_url)
+    if ownership_errors or not isinstance(active, dict):
+        return False, ["recovery_owner_unavailable"]
+    if (active.get("state") != "ACTIVE"
+            or active.get("canonical_write_performed") is not True
+            or any(active.get(key) != journal.get(key)
+                   for key in ("transaction_id", "batch_id", "owner", "journal_path"))):
+        return False, ["recovery_owner_mismatch"]
     journal["state"] = "RECOVERY_REQUIRED"
     journal["canonical_write_performed"] = True
     if not persist_journal(remote, journal):
