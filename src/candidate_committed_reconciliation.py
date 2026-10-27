@@ -162,7 +162,8 @@ def reconcile_committed_release(journal: dict, receipt_raw: bytes, *,
     if owner.get("state") == "FREE":
         if (owner.get("release_reason") == "VERIFIED_COMMITTED"
                 and owner.get("released_receipt_sha256") == receipt_sha
-                and all(owner.get("released_" + k) == v for k, v in identity.items())):
+                and all(owner.get("released_by_owner" if k == "owner" else "released_" + k) == v
+                        for k, v in identity.items())):
             return "ALREADY_RELEASED", []
         return "BLOCKED", ["coordinator_released_foreign_transaction"]
     if (owner.get("state") != "ACTIVE"
@@ -179,7 +180,8 @@ def reconcile_committed_release(journal: dict, receipt_raw: bytes, *,
     if (final.get("state") == "FREE"
             and final.get("release_reason") == "VERIFIED_COMMITTED"
             and final.get("released_receipt_sha256") == receipt_sha
-            and all(final.get("released_" + k) == v for k, v in identity.items())):
+            and all(final.get("released_by_owner" if k == "owner" else "released_" + k) == v
+                    for k, v in identity.items())):
         return "RELEASED", []
     return "UNCERTAIN", ["commit_release_unconfirmed"]
 
