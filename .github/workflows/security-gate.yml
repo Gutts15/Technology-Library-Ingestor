@@ -42,6 +42,9 @@ jobs:
       - name: Test synthetic E3 durable snapshot and recovery fixture
         run: python3 -m unittest tests.test_e3_recovery_fixture -q
 
+      - name: Test isolated E3 terminal receipt and committed-state hashes
+        run: python3 -m unittest tests.test_e3_terminal_receipt -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
