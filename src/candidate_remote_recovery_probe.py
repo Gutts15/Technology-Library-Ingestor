@@ -59,14 +59,27 @@ def fixture_prefix(fixture_id: str) -> str:
     return str(PurePosixPath(FIXTURE_ROOT) / fixture_id)
 
 
+class RemoteUncertainExit(SystemExit):
+    """Fail the current worker without triggering an unsafe rollback on timeout."""
+    def __init__(self):
+        super().__init__(75)
+
+
 def run_rclone(args: list[str], *, binary: bool = False) -> subprocess.CompletedProcess[Any]:
-    return subprocess.run(
-        ["rclone", *args],
-        check=False,
-        capture_output=True,
-        text=not binary,
-        env=os.environ.copy(),
-    )
+    # A timed-out remote operation may have committed despite missing its ACK.
+    # SystemExit deliberately bypasses RuntimeError recovery and prevents the
+    # previous owner from releasing its Git lease based on a false failure.
+    try:
+        return subprocess.run(
+            ["rclone", *args],
+            check=False,
+            capture_output=True,
+            text=not binary,
+            env=os.environ.copy(),
+            timeout=105,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        raise RemoteUncertainExit() from None
 
 
 def remote_cat(remote_root: str, relative: str) -> bytes | None:
