@@ -72,6 +72,7 @@ def compile_transaction(root: Path, raw_lote: bytes, lot_relative: str,
                 or decisions_file["schema_version"] != 1
                 or decisions_file["lote_id"] != lote["lote_id"]
                 or decisions_file["lote_sha256"] != checksum(raw_lote)
+                or decisions_file["model"] != "gemini-3.5-flash-lite"
                 or decisions_file["canonical_write_performed"] is not False):
             raise PreflightError("decisions_binding_invalid")
         decisions = validate_model_output(lote, {"decisoes": decisions_file["decisoes"]})
