@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -30,6 +31,9 @@ import e3_recovery_fixture as recovery
 import e3_commit_fixture as commit
 from e3_lote_state import related_paths, verify_settlement
 from e1_lote_prepare import LOTES, encode
+from candidate_committed_reconciliation import reconcile_committed_release
+from candidate_production_coordinator import read_state
+from e3_coordinator_fixture import local_bare_repository
 from tests.test_e3_transaction_preflight import E3PreflightTests
 
 PREFIX = "99_INBOX/CANDIDATES/E3_COMMITTED_REMOTE_FIXTURE"
@@ -73,6 +77,48 @@ def synthetic_two_item_batch(case: E3PreflightTests):
         "lote_sha256": sha(lot_raw), "model": "gemini-3.5-flash-lite",
         "canonical_write_performed": False, "decisoes": [create, update]})
     return lot_raw, raw_decisions
+
+
+def verify_fresh_committed(prefix: str, bare_path: str, journal_relative: str) -> bool:
+    """Fresh worker: verify only remote Drive bytes and an already released Git CAS."""
+    if not re.fullmatch(r"99_INBOX/CANDIDATES/E3_COMMITTED_REMOTE_FIXTURE/[0-9a-f]{24}", prefix):
+        raise ValueError("fixture_prefix_invalid")
+    if not re.fullmatch(
+        r"99_INBOX/CANDIDATES/PRODUCTION_RECOVERY/[0-9a-f]{20}/"
+        r"candidate-publisher-[0-9a-f]{12}/journal.json", journal_relative
+    ):
+        raise ValueError("fixture_journal_invalid")
+    repo = Path(bare_path).resolve()
+    root = repo.parent
+    local_bare_repository(root, repo)
+    journal_raw = remote_cat("tl:", prefix + "/" + journal_relative)
+    if journal_raw is None or len(journal_raw) > 128 * 1024:
+        raise ValueError("fixture_journal_unavailable")
+    try:
+        journal = json.loads(journal_raw.decode("utf-8"))
+    except (ValueError, UnicodeError):
+        raise ValueError("fixture_journal_invalid_json") from None
+    if not isinstance(journal, dict) or journal.get("journal_path") != journal_relative:
+        raise ValueError("fixture_journal_identity")
+    run_root = journal.get("run_root")
+    if not isinstance(run_root, str) or not run_root.startswith(
+        "99_INBOX/CANDIDATES/PRODUCTION_RECOVERY/"
+    ):
+        raise ValueError("fixture_run_root_invalid")
+    receipt_raw = remote_cat("tl:", prefix + "/" + run_root + "/receipt.json")
+    if receipt_raw is None:
+        raise ValueError("fixture_receipt_unavailable")
+    result, errors = reconcile_committed_release(
+        journal, receipt_raw,
+        read_canonical=lambda path: remote_cat("tl:", prefix + "/" + path),
+        read_private=lambda path: remote_cat("tl:", prefix + "/" + path),
+        read_owner=lambda: read_state(str(repo)),
+        release_once=lambda **_: (_ for _ in ()).throw(
+            ValueError("unexpected_second_git_release")),
+    )
+    if errors or result != "ALREADY_RELEASED":
+        raise ValueError("fixture_fresh_readback_unverified")
+    return True
 
 
 def run_fixture(remote: str = "tl:") -> dict:
@@ -155,6 +201,15 @@ def run_fixture(remote: str = "tl:") -> dict:
         receipt = (root / LOTES / related_paths(case.path)[1]).read_bytes()
         if verify_settlement(lot_raw, case.path, decisions_raw, receipt)["writes"] != 2:
             raise ValueError("terminal_outcomes_mismatch")
+        # A second Python interpreter must prove durable Drive and Git facts,
+        # without relying on the publisher's in-memory transaction state.
+        child = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--verify-fixture",
+             prefix, str(bare), str(journal["journal_path"])],
+            check=False, capture_output=True, timeout=180,
+        )
+        if child.returncode != 0:
+            raise ValueError("fresh_process_committed_reconciliation_failed")
         success = True
     finally:
         if success:
@@ -185,13 +240,19 @@ def run_fixture(remote: str = "tl:") -> dict:
 
 def main() -> int:
     try:
+        if len(sys.argv) == 5 and sys.argv[1] == "--verify-fixture":
+            verify_fresh_committed(sys.argv[2], sys.argv[3], sys.argv[4])
+            print("e3_committed_reconcile status=PASS fresh_process=1 canonical_write=0")
+            return 0
+        if len(sys.argv) != 1:
+            raise ValueError("invalid_mode")
         report = run_fixture()
     except (Exception, SystemExit):
         # Intentionally do not reveal remote paths, credentials, or content.
         print("e3_remote_commit status=BLOCKED canonical_write=0")
         return 2
     print("e3_remote_commit status=PASS create=1 update=1 "
-          "receipt=1 journal=1 readback=1 cleanup=1 canonical_write=0")
+          "receipt=1 journal=1 readback=1 cleanup=1 fresh_process=1 canonical_write=0")
     return 0
 
 
