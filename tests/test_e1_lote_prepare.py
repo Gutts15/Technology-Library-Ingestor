@@ -31,12 +31,13 @@ class TestE1Prepare(unittest.TestCase):
         location.write_bytes(data)
         return location
 
-    def fixture(self, contents="React Bits offers React UI components.", count=1, kind="text"):
+    def fixture(self, contents="React Bits offers React UI components.", count=1, kind="text", extra=None):
         envelopes = []
         for n in range(count):
             pid = format(n + 1, "020x")
             rev = format(n + 101, "020x")
             payload = {"schema_version": 1, "evidence": {"samples": [contents]}}
+            payload.update(extra or {})
             raw = e1.encode(payload)
             item = {
                 "package_id": pid, "revision_key": rev, "kind": kind,
@@ -70,6 +71,22 @@ class TestE1Prepare(unittest.TestCase):
         self.store.create(path, e1.encode(lote))
         self.assertEqual(self.store.read(path), e1.encode(lote))
         self.assertEqual(e1.prepare(self.store, "2026-10-28")[0], None)
+
+    def test_items_hash_matches_exact_item_bytes(self):
+        self.fixture()
+        lote, _, _ = e1.prepare(self.store, "2026-10-27")
+        import hashlib
+        self.assertEqual(lote["items_sha256"],
+                         hashlib.sha256(e1.encode(lote["itens"])).hexdigest())
+
+    def test_unapproved_source_metadata_never_enters_lote(self):
+        self.fixture(extra={"content": {"original_filename": "PRIVATE_DO_NOT_SEND.txt"},
+                            "extraction": {"provider_id": "SENSITIVE_SOURCE_ID"}})
+        lote, _, _ = e1.prepare(self.store, "2026-10-27")
+        raw = e1.encode(lote).decode("utf-8")
+        self.assertNotIn("PRIVATE_DO_NOT_SEND", raw)
+        self.assertNotIn("SENSITIVE_SOURCE_ID", raw)
+        self.assertEqual(set(lote["itens"][0]["evidence_compact"]), {"evidence"})
 
     def test_existing_lote_is_immutable(self):
         self.fixture()
