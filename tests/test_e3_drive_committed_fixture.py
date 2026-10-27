@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from e2_gemini_decide import validate_lote, validate_model_output, strict_json
 from e3_transaction_preflight import compile_transaction, simulate
-from e3_drive_committed_fixture import synthetic_two_item_batch, PREFIX
+from e3_drive_committed_fixture import synthetic_two_item_batch, PREFIX, verify_fresh_committed
 from tests.test_e3_transaction_preflight import E3PreflightTests
 
 
@@ -31,6 +31,21 @@ class DriveCommittedContractTests(unittest.TestCase):
         self.assertEqual([r["acao"] for r in settlement["results"]], ["CREATE", "UPDATE"])
         self.assertEqual(simulate(self.case.root, lot, self.case.path, decisions)["writes_simulated"], 2)
         self.assertFalse((self.case.root / "00_LIBRARY/02_WEB_DEVELOPMENT/UI_COMPONENTS/technology-pixel-rig-tool.md").exists())
+
+    def test_fresh_reconciliation_rejects_outside_fixture_without_remote_reads(self):
+        from unittest.mock import patch
+        with patch("e3_drive_committed_fixture.remote_cat") as remote:
+            with self.assertRaisesRegex(ValueError, "fixture_prefix_invalid"):
+                verify_fresh_committed("00_LIBRARY", "/tmp/outside.git", "journal.json")
+            remote.assert_not_called()
+
+    def test_fresh_reconciliation_rejects_unsafe_journal_without_remote_reads(self):
+        from unittest.mock import patch
+        with patch("e3_drive_committed_fixture.remote_cat") as remote:
+            with self.assertRaisesRegex(ValueError, "fixture_journal_invalid"):
+                verify_fresh_committed(
+                    PREFIX + "/" + "a" * 24, "/tmp/outside.git", "../../journal.json")
+            remote.assert_not_called()
 
     def test_remote_root_is_private_fixture_only(self):
         self.assertTrue(PREFIX.startswith("99_INBOX/CANDIDATES/"))
