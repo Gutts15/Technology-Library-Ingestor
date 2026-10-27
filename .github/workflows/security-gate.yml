@@ -54,6 +54,9 @@ jobs:
       - name: Test E1 E2 E3 synthetic HOLD and continuation flow
         run: python3 -m unittest tests.test_e123_synthetic_integration -q
 
+      - name: Test E3 local Git CAS coordinator and recovery isolation
+        run: python3 -m unittest tests.test_e3_coordinator_fixture -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
