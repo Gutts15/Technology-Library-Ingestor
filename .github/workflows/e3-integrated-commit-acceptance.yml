@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/e3-integrated-commit-acceptance.yml'
+      - 'src/e3_drive_committed_fixture.py'
 
 permissions:
   contents: read
