@@ -53,7 +53,7 @@ class E3ReceiptContractTests(unittest.TestCase):
 
     def test_update_plan_produces_verified_existing_receipt(self):
         self.fixture.item["evidence_compact"]["evidence"]["samples"] = [
-            "React Bits provides animated React components."
+            "React Bits provides animated React components. A standalone export workflow is now supported."
         ]
         self.fixture.item["matches"] = [{"record_id": "0123456789abcdef0123", "title": "React Bits"}]
         from e1_lote_prepare import encode
@@ -67,8 +67,8 @@ class E3ReceiptContractTests(unittest.TestCase):
             route="02_WEB_DEVELOPMENT/UI_COMPONENTS",
             target_record_id="0123456789abcdef0123",
             record_markdown=updated,
-            claims=[{"text": "Animated React components",
-                     "evidence_quote": "animated React components"}])
+            claims=[{"text": "Standalone export workflow supported",
+                     "evidence_quote": "standalone export workflow"}])
         plan, staged, record_paths, _ = compile_transaction(
             self.root, self.fixture.lote_raw, self.fixture.path,
             self.fixture.decision_bytes(row))
