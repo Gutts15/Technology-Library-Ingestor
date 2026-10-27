@@ -111,7 +111,7 @@ class StrictRecoveryTests(unittest.TestCase):
                 entry.pop("after_sha256", None)
         errors = bind_expected_post_hashes(
             journal, plan, paths,
-            lambda p: (case.root / p).read_bytes() if (case.root / p).is_file() else None)
+            lambda p: staged[p] if p in staged else ((case.root / p).read_bytes() if (case.root / p).is_file() else None))
         self.assertEqual(errors, [])
         self.assertTrue(all(entry.get("after_sha256") for group in ("items", "indexes")
                             for entry in journal[group]))
