@@ -27,13 +27,21 @@ STATE_PATH = ".candidate-production-coordinator.json"
 
 
 def git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd) if cwd is not None else None,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    # Every Git transport boundary must be bounded. A timed-out push has an
+    # UNCERTAIN remote outcome; callers must read/ref-check before retrying or
+    # releasing a lease. Never expose Git stderr in public Actions logs.
+    command = ["git", *args]
+    try:
+        return subprocess.run(
+            command,
+            cwd=str(cwd) if cwd is not None else None,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=40,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return subprocess.CompletedProcess(command, 124, "", "")
 
 
 def ls_remote(remote_url: str) -> str | None:
