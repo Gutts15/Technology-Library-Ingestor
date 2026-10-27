@@ -39,6 +39,9 @@ jobs:
       - name: Test E3 in-memory transaction simulation with synthetic records
         run: python3 -m unittest tests.test_e3_transaction_preflight -q
 
+      - name: Test synthetic E3 durable snapshot and recovery fixture
+        run: python3 -m unittest tests.test_e3_recovery_fixture -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
