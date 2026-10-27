@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from candidate_committed_reconciliation import (
-    proof_errors, reconcile_committed_release,
+    proof_errors, reconcile_committed_release, classify_restart,
 )
 from candidate_production_coordinator import read_state
 from e3_commit_fixture import exercise_commit
@@ -59,6 +59,66 @@ class CommittedReconciliationTests(unittest.TestCase):
             journal or self.journal,
             self.receipt if receipt is None else receipt,
             read_canonical=self.canonical, read_private=self.private)
+
+    def before_reader(self, path):
+        for group, name in ((self.journal["items"], "target_path"),
+                            (self.journal["indexes"], "path")):
+            for entry in group:
+                if entry[name] == path:
+                    snapshot = entry.get("snapshot_path")
+                    return self.private(snapshot) if snapshot else None
+        return self.canonical(path)
+
+    def test_restart_routes_durable_commit_to_readonly_reconciliation(self):
+        active = self.active_owner()
+        state, errors = classify_restart(
+            self.journal, active, read_canonical=self.canonical,
+            read_snapshot=self.private, receipt_raw=self.receipt)
+        self.assertEqual((state, errors), ("RECONCILE_COMMITTED", []))
+        state, errors = classify_restart(
+            self.journal, self.free, read_canonical=self.canonical,
+            read_snapshot=self.private, receipt_raw=self.receipt)
+        self.assertEqual((state, errors), ("ALREADY_RELEASED", []))
+
+    def test_restart_recovery_required_has_valid_crossfile_preconditions(self):
+        journal = dict(self.journal, state="RECOVERY_REQUIRED")
+        active = self.active_owner()
+        state, errors = classify_restart(
+            journal, active, read_canonical=self.canonical,
+            read_snapshot=self.private)
+        self.assertEqual((state, errors), ("RECOVER_UNCOMMITTED", []))
+
+    def test_restart_prepared_must_prove_all_prewrite_bytes(self):
+        journal = dict(self.journal, state="PREPARED")
+        active = dict(self.active_owner(), canonical_write_performed=False)
+        state, errors = classify_restart(
+            journal, active, read_canonical=self.before_reader,
+            read_snapshot=self.private)
+        self.assertEqual((state, errors), ("SAFE_PREWRITE_ABORT", []))
+        state, errors = classify_restart(
+            journal, active, read_canonical=self.canonical,
+            read_snapshot=self.private)
+        self.assertEqual((state, errors), ("BLOCKED", ["restart_prewrite_content_changed"]))
+
+    def test_restart_ambiguous_write_boundary_fails_closed(self):
+        journal = dict(self.journal, state="PREPARED")
+        active = self.active_owner()
+        state, errors = classify_restart(
+            journal, active, read_canonical=self.before_reader,
+            read_snapshot=self.private)
+        self.assertEqual((state, errors), ("BLOCKED", ["restart_prewrite_uncertain"]))
+
+    def test_restart_recovered_path_requires_reverified_original_bytes(self):
+        journal = dict(self.journal, state="RECOVERED",
+                       rollback_verified=True, restart_recovery_verified=True)
+        state, errors = classify_restart(
+            journal, self.active_owner(), read_canonical=self.before_reader,
+            read_snapshot=self.private)
+        self.assertEqual((state, errors), ("RELEASE_RECOVERED", []))
+        state, errors = classify_restart(
+            journal, self.active_owner(), read_canonical=self.canonical,
+            read_snapshot=self.private)
+        self.assertEqual((state, errors), ("BLOCKED", ["restart_recovered_state_unverified"]))
 
     def test_actual_created_transaction_proofs_all_bytes(self):
         self.assertEqual(self.verify(), [])
