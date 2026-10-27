@@ -119,7 +119,7 @@ class E3PreflightTests(unittest.TestCase):
             e3.simulate(self.root, self.lote_raw, self.path, self.decision_bytes(row))
 
     def test_update_requires_preserved_original_content(self):
-        self.item["evidence_compact"]["evidence"]["samples"] = ["React Bits provides animated React components."]
+        self.item["evidence_compact"]["evidence"]["samples"] = ["React Bits provides animated React components. A standalone export workflow is now supported."]
         self.item["matches"] = [{"record_id": "0123456789abcdef0123", "title": "React Bits"}]
         self.lote["items_sha256"] = hashlib.sha256(encode(self.lote["itens"])).hexdigest()
         self.lote_raw = encode(self.lote)
@@ -128,16 +128,16 @@ class E3PreflightTests(unittest.TestCase):
                             record_type="TECHNOLOGY", route="02_WEB_DEVELOPMENT/UI_COMPONENTS",
                             target_record_id="0123456789abcdef0123",
                             record_markdown=updated,
-                            claims=[{"text": "Animated React components", "evidence_quote": "animated React components"}])
+                            claims=[{"text": "Standalone export workflow supported", "evidence_quote": "standalone export workflow"}])
         result = e3.simulate(self.root, self.lote_raw, self.path, self.decision_bytes(row))
         self.assertEqual(result["writes_simulated"], 1)
         self.assertEqual((self.root / self.canonical_path).read_bytes(), self.original)
-        row["record_markdown"] = updated.replace("React Bits provides animated React components.", "Old facts removed.")
+        row["record_markdown"] = updated.replace("React Bits provides animated React components. A standalone export workflow is now supported.", "Old facts removed.")
         plan, staged, _, _ = e3.compile_transaction(
             self.root, self.lote_raw, self.path, self.decision_bytes(row))
         merged = staged[plan["items"][0]["content_path"]].decode("utf-8")
         self.assertIn(self.original.decode().strip(), merged)
-        self.assertIn("Animated React components", merged)
+        self.assertIn("Standalone export workflow supported", merged)
         self.assertNotIn("Old facts removed", merged)
         self.assertEqual((self.root / self.canonical_path).read_bytes(), self.original)
 
@@ -149,7 +149,7 @@ class E3PreflightTests(unittest.TestCase):
                 [validate_record(self.canonical_path, base)]).items():
             self.write(path, raw)
         self.item["evidence_compact"]["evidence"]["samples"] = [
-            "React Bits provides animated React components."
+            "React Bits provides animated React components. A standalone export workflow is now supported."
         ]
         self.item["matches"] = [{"record_id": "0123456789abcdef0123", "title": "React Bits"}]
         self.lote["items_sha256"] = hashlib.sha256(encode(self.lote["itens"])).hexdigest()
@@ -160,7 +160,7 @@ class E3PreflightTests(unittest.TestCase):
             record_type="TECHNOLOGY", route="02_WEB_DEVELOPMENT/UI_COMPONENTS",
             target_record_id="0123456789abcdef0123",
             record_markdown=proposal,
-            claims=[{"text": "Animated React components", "evidence_quote": "animated React components"}])
+            claims=[{"text": "Standalone export workflow supported", "evidence_quote": "standalone export workflow"}])
         plan, staged, _, _ = e3.compile_transaction(
             self.root, self.lote_raw, self.path, self.decision_bytes(row))
         merged = staged[plan["items"][0]["content_path"]]
