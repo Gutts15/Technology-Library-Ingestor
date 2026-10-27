@@ -65,7 +65,8 @@ class Storage:
             raise PreparationError("private_input_oversize")
         return raw
 
-    def past_lotes(self) -> list[str]:
+    def inventory_files(self) -> list[str]:
+        """Bounded, fail-closed private inventory, including terminal sidecars."""
         if self.root is None:
             try:
                 listing = json.loads(self.command("lsjson", self.remote + LOTES,
@@ -77,10 +78,13 @@ class Storage:
             paths = [item.get("Path") for item in listing if isinstance(item, dict)]
         else:
             base = self.root / LOTES
-            paths = [p.relative_to(base).as_posix() for p in base.glob("*/lote*.json")]
+            paths = [p.relative_to(base).as_posix() for p in base.glob("*/*.json")]
         if len(paths) > 1000 or not all(isinstance(p, str) for p in paths):
             raise PreparationError("lote_inventory_invalid")
-        return sorted(path for path in paths if LOT_RE.fullmatch(path))
+        return sorted(paths)
+
+    def past_lotes(self) -> list[str]:
+        return [p for p in self.inventory_files() if LOT_RE.fullmatch(p)]
 
     def create(self, path: str, data: bytes) -> None:
         if self.root is not None:
@@ -131,11 +135,15 @@ def validate_index(value: Any) -> list[dict[str, str]]:
 
 
 def past_state(store: Storage) -> tuple[set[str], bool, set[str]]:
+    from e3_lote_state import LotStateError, related_paths, verify_settlement
+
     seen = set()
     pending = False
     names = set()
-    for subpath in store.past_lotes():
-        data = read_json_bytes(store.read(LOTES + "/" + subpath))
+    inventory = set(store.inventory_files())
+    for subpath in sorted(path for path in inventory if LOT_RE.fullmatch(path)):
+        raw = store.read(LOTES + "/" + subpath)
+        data = read_json_bytes(raw)
         if not isinstance(data, dict) or data.get("schema_version") != 1:
             raise PreparationError("previous_lote_invalid")
         if data.get("status") not in {"PRONTO", "APLICADO", "REJEITADO", "HOLD"}:
@@ -148,7 +156,23 @@ def past_state(store: Storage) -> tuple[set[str], bool, set[str]]:
             if not isinstance(key, str) or not ID_RE.fullmatch(key) or key in seen:
                 raise PreparationError("previous_lote_invalid")
             seen.add(key)
-        pending |= data["status"] == "PRONTO"
+        if data["status"] == "PRONTO":
+            try:
+                decisions_subpath, receipt_subpath = related_paths(subpath)
+            except LotStateError:
+                raise PreparationError("previous_lote_path_invalid") from None
+            if receipt_subpath in inventory:
+                if decisions_subpath not in inventory:
+                    raise PreparationError("settlement_decisions_missing")
+                try:
+                    verify_settlement(
+                        raw, subpath,
+                        store.read(LOTES + "/" + decisions_subpath, max_bytes=400 * 1024),
+                        store.read(LOTES + "/" + receipt_subpath, max_bytes=120 * 1024))
+                except LotStateError:
+                    raise PreparationError("settlement_invalid") from None
+            else:
+                pending = True
         names.add(subpath)
     return seen, pending, names
 
