@@ -186,6 +186,107 @@ def reconcile_committed_release(journal: dict, receipt_raw: bytes, *,
     return "UNCERTAIN", ["commit_release_unconfirmed"]
 
 
+def classify_restart(journal: dict | None, coordinator: dict | None, *,
+                     read_canonical: Read, read_snapshot: Read,
+                     receipt_raw: bytes | None = None) -> tuple[str, list[str]]:
+    """Pure state-machine router for the next owner session; makes no writes.
+
+    Returning a route does not itself release Git or restore data. The caller
+    must use the existing verified commit/prewrite/recovery engines.
+    """
+    from candidate_production_recovery_engine import verify_rollback_preconditions
+    if not isinstance(journal, dict) or not isinstance(coordinator, dict):
+        return "BLOCKED", ["restart_evidence_unavailable"]
+    keys = ("transaction_id", "batch_id", "owner", "journal_path")
+    if not all(isinstance(journal.get(k), str) and journal[k] for k in keys):
+        return "BLOCKED", ["restart_journal_identity_invalid"]
+    state = journal.get("state")
+    if state == "COMMITTED":
+        if receipt_raw is None:
+            return "BLOCKED", ["committed_receipt_unavailable"]
+        errors = proof_errors(journal, receipt_raw,
+                              read_canonical=read_canonical, read_private=read_snapshot)
+        if errors:
+            return "BLOCKED", errors
+        if coordinator.get("state") == "FREE":
+            result, mismatch = reconcile_committed_release(
+                journal, receipt_raw, read_canonical=read_canonical,
+                read_private=read_snapshot,
+                read_owner=lambda: (None, coordinator, []),
+                release_once=lambda **_: (_ for _ in ()).throw(
+                    AssertionError("read_only_classifier_cannot_release")),
+            )
+            return ("ALREADY_RELEASED", []) if result == "ALREADY_RELEASED" else ("BLOCKED", mismatch)
+        if (coordinator.get("state") == "ACTIVE"
+                and coordinator.get("canonical_write_performed") is True
+                and all(coordinator.get(k) == journal[k] for k in keys)):
+            return "RECONCILE_COMMITTED", []
+        return "BLOCKED", ["restart_commit_owner_mismatch"]
+    if (coordinator.get("state") != "ACTIVE"
+            or any(coordinator.get(k) != journal[k] for k in keys)):
+        return "BLOCKED", ["restart_owner_mismatch"]
+    armed = coordinator.get("canonical_write_performed")
+    if state == "PREPARED":
+        if armed is not False or journal.get("snapshots_verified") is not True:
+            return "BLOCKED", ["restart_prewrite_uncertain"]
+        if not _canonical_equals_before(journal, read_canonical, read_snapshot):
+            return "BLOCKED", ["restart_prewrite_content_changed"]
+        return "SAFE_PREWRITE_ABORT", []
+    if state in {
+        "WRITING_RECORDS", "REBUILDING_INDEXES", "VERIFYING",
+        "COMMITTED_PENDING_RECEIPT", "RECOVERY_REQUIRED",
+    }:
+        if armed is not True:
+            return "BLOCKED", ["restart_write_boundary_unconfirmed"]
+        problems = verify_rollback_preconditions(
+            journal, read_canonical=read_canonical, read_snapshot=read_snapshot)
+        if problems:
+            return "BLOCKED", problems
+        return "RECOVER_UNCOMMITTED", []
+    if state == "RECOVERED":
+        if (armed is not True or journal.get("rollback_verified") is not True
+                or journal.get("restart_recovery_verified") is not True
+                or journal.get("coordinator_release_allowed") is not True
+                or not _canonical_equals_before(journal, read_canonical, read_snapshot)):
+            return "BLOCKED", ["restart_recovered_state_unverified"]
+        return "RELEASE_RECOVERED", []
+    return "BLOCKED", ["restart_journal_state_unsupported"]
+
+
+def _canonical_equals_before(journal: dict, read_canonical: Read,
+                             read_snapshot: Read) -> bool:
+    if journal.get("snapshots_verified") is not True:
+        return False
+    rows = journal.get("items")
+    indexes = journal.get("indexes")
+    if not isinstance(rows, list) or not isinstance(indexes, list) or not rows or not indexes:
+        return False
+    touched = set()
+    for group, key in ((rows, "target_path"), (indexes, "path")):
+        for entry in group:
+            if not isinstance(entry, dict) or not safe_canonical(entry.get(key)):
+                return False
+            path = entry[key]
+            if path in touched:
+                return False
+            touched.add(path)
+            before = entry.get("before_sha256")
+            current = read_canonical(path)
+            if entry.get("existed_before") is True:
+                snap = entry.get("snapshot_path")
+                if (not isinstance(before, str) or not SHA.fullmatch(before)
+                        or not isinstance(snap, str)
+                        or not snap.startswith(str(journal.get("run_root")) + "/snapshots/")
+                        or (content := read_snapshot(snap)) is None
+                        or digest(content) != before
+                        or current is None or digest(current) != before):
+                    return False
+            elif (entry.get("existed_before") is not False
+                  or before is not None or current is not None):
+                return False
+    return MASTER in touched and digest(read_canonical(MASTER) or b"") == journal.get("master_index_before_sha256")
+
+
 def reconcile_live(remote: str, git_remote: str, journal_path: str) -> tuple[str, list[str]]:
     """Privileged call: only for a trusted run already holding approved access."""
     from candidate_remote_recovery_probe import remote_cat
