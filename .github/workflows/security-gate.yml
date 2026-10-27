@@ -30,6 +30,9 @@ jobs:
       - name: Test zero-touch intake with synthetic metadata only
         run: python3 -m unittest tests.test_zero_touch_intake tests.test_intake_daily_session -q
 
+      - name: Test E1 lot assembler with synthetic evidence only
+        run: python3 -m unittest tests.test_e1_lote_prepare -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
