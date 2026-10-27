@@ -21,7 +21,7 @@ The canonical transaction, durable journal, index rebuild and rollback engines w
 
 `python3 -m unittest tests.test_e3_coordinator_fixture -q`
 
-Covers verified rollback+owner release, partial write with recovery on another invocation, rejection of a concurrent owner, foreign canonical modification refusing rollback, journal corruption, mismatched ownership, rejection of nonfixture Git URL/paths, no-write fast path without lease, and bounded Git timeout. The full PR CI also executes the E1/E2/E3 and cost/privacy guardrails.
+Covers verified rollback+owner release, partial write with recovery on another invocation, rejection of a concurrent owner, foreign canonical modification refusing rollback, journal corruption, mismatched ownership, rejection of nonfixture Git URL/paths, no-write fast path without lease, bounded Git timeout, and two lost-acknowledgement cases: Git acquire succeeds remotely but returns failure locally, or the write-boundary CAS succeeds but its acknowledgement is lost. Both block mutation/release and preserve exact ACTIVE ownership. The full PR CI also executes the E1/E2/E3 and cost/privacy guardrails.
 
 ## Still blocked before running on real data
 
