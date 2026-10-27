@@ -1,0 +1,50 @@
+name: E3 isolated Drive recovery smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/e3-isolated-drive-recovery.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-e3-private-recovery-smoke
+  cancel-in-progress: false
+
+jobs:
+  recover_synthetic:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install private-storage client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq >/dev/null 2>&1
+          sudo apt-get install -y -qq rclone >/dev/null 2>&1
+
+      - name: Configure temporary private Drive client
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TL_RCLONE_CONFIG:-}" ]; then
+            echo 'e3_smoke status=SECRET_MISSING canonical_write=0'
+            exit 2
+          fi
+          umask 077
+          printf '%s' "$TL_RCLONE_CONFIG" > "$RUNNER_TEMP/rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/rclone.conf" >> "$GITHUB_ENV"
+
+      - name: Verify isolated fresh-process recovery over real Drive transport
+        run: |
+          set -euo pipefail
+          python3 src/candidate_production_restart_recovery_fixture.py --remote tl: --apply-remote-fixture
