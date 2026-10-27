@@ -56,6 +56,50 @@ def canonical_path(record: dict) -> str:
     return "00_LIBRARY/" + record["domain"] + "/" + record["category"] + "/" + name
 
 
+def append_verified_claims(original: bytes, claims: list[dict]) -> bytes:
+    """Append only validated E2 claim text to original canonical bytes.
+
+    Model-authored UPDATE Markdown supplies a header/route proposal but must
+    never replace existing canonical prose or STATUS. E3 owns the merge.
+    """
+    if not isinstance(claims, list) or not 1 <= len(claims) <= 12:
+        raise PreflightError("update_claims_invalid")
+    try:
+        prior = original.decode("utf-8")
+    except UnicodeError:
+        raise PreflightError("update_original_invalid") from None
+    if "\x00" in prior or len(original) > 128 * 1024:
+        raise PreflightError("update_original_invalid")
+    additions = []
+    seen = set()
+    for claim in claims:
+        if not isinstance(claim, dict) or set(claim) != {"text", "evidence_quote"}:
+            raise PreflightError("update_claims_invalid")
+        claim_text = claim.get("text")
+        evidence = claim.get("evidence_quote")
+        if not isinstance(claim_text, str) or not isinstance(evidence, str):
+            raise PreflightError("update_claims_invalid")
+        # Make untrusted content inert as a single-line Markdown data field.
+        claim_text = " ".join(claim_text.split())
+        evidence = " ".join(evidence.split())
+        if (not 8 <= len(evidence) <= 600 or not 4 <= len(claim_text) <= 1200
+                or any(ch in claim_text + evidence for ch in "<>[]`\\\\")
+                or any(ord(ch) < 32 for ch in claim_text + evidence)):
+            raise PreflightError("update_claim_unsafe")
+        key = normalize_title(claim_text)
+        if key in seen:
+            raise PreflightError("update_duplicate_claim")
+        seen.add(key)
+        if key in normalize_title(prior):
+            raise PreflightError("update_claim_already_present")
+        additions.append(f"- {claim_text} (Evidence excerpt: \"{evidence}\")")
+    joined = prior.rstrip("\n") + "\n\n## EVIDENCE ADDITIONS\n" + "\n".join(additions) + "\n"
+    output = joined.encode("utf-8")
+    if len(output) > 128 * 1024:
+        raise PreflightError("update_result_oversize")
+    return output
+
+
 def nonwrite_decision_is_safe(decision: dict) -> None:
     if decision["acao"] not in {"HOLD", "REJECT", "UNCHANGED"}:
         raise PreflightError("unexpected_action")
@@ -153,10 +197,23 @@ def compile_transaction(root: Path, raw_lote: bytes, lot_relative: str,
             if header["RECORD_ID"] != record_id or record_ids.get(record_id) != target:
                 raise PreflightError("update_record_identity")
             original = store.read(target, 128 * 1024)
-            # Conservative preservation gate: no old record text is silently
-            # removed during an UPDATE. E2 must be taught to include it.
-            if original.strip() not in raw:
-                raise PreflightError("update_drops_existing_content")
+            try:
+                current = validate_record(target, original)
+            except ValueError:
+                raise PreflightError("update_existing_record_invalid") from None
+            if (current["record_id"] != record_id
+                    or current["record_type"] != header["TYPE"]
+                    or current["domain"] != header["DOMAIN"]
+                    or current["category"] != header["CATEGORY"]
+                    or normalize_title(current["title"]) != normalize_title(header["TITLE"])):
+                raise PreflightError("update_header_drift")
+            # Discard model-written replacement prose. Merge only validated,
+            # quote-grounded claims beneath the original canonical bytes.
+            raw = append_verified_claims(original, decision["claims"])
+            try:
+                validate_record(target, raw)
+            except ValueError:
+                raise PreflightError("update_merged_record_invalid") from None
             base_sha = checksum(original)
             condition = "EXACT_BASE_SHA"
         content_path = PATH_PREFIX + item["item_id"] + ".md"
