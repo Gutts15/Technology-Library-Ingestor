@@ -165,7 +165,7 @@ class E3PreflightTests(unittest.TestCase):
             self.root, self.lote_raw, self.path, self.decision_bytes(row))
         merged = staged[plan["items"][0]["content_path"]]
         self.assertIn(b"STATUS: REFERENCE", merged)
-        self.assertTrue(merged.startswith(base.rstrip(b"\\n")))
+        self.assertTrue(merged.startswith(base.rstrip(b"\n")))
         self.assertIn(b"Evidence excerpt", merged)
         self.assertEqual((self.root / self.canonical_path).read_bytes(), base)
 
