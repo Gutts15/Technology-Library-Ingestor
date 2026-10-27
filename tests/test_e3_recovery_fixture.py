@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import e3_recovery_fixture as recovery
-from test_e3_transaction_preflight import E3PreflightTests
+from tests.test_e3_transaction_preflight import E3PreflightTests
 
 
 class TestE3FixtureRecovery(unittest.TestCase):
