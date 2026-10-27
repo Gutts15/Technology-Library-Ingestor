@@ -36,6 +36,27 @@ jobs:
       - name: Test isolated E2 decisions with synthetic evidence only
         run: python3 -m unittest tests.test_e2_gemini_decide tests.test_cost_guardrail_g03b -q
 
+      - name: Test E3 in-memory transaction simulation with synthetic records
+        run: python3 -m unittest tests.test_e3_transaction_preflight -q
+
+      - name: Test synthetic E3 durable snapshot and recovery fixture
+        run: python3 -m unittest tests.test_e3_recovery_fixture -q
+
+      - name: Test isolated E3 terminal receipt and committed-state hashes
+        run: python3 -m unittest tests.test_e3_terminal_receipt -q
+
+      - name: Test immutable E1 E3 receipt sidecar reconciliation
+        run: python3 -m unittest tests.test_e3_lote_state -q
+
+      - name: Test E3 private immutable write uncertainty and reconciliation
+        run: python3 -m unittest tests.test_e3_private_write -q
+
+      - name: Test E1 E2 E3 synthetic HOLD and continuation flow
+        run: python3 -m unittest tests.test_e123_synthetic_integration -q
+
+      - name: Test E3 local Git CAS coordinator and recovery isolation
+        run: python3 -m unittest tests.test_e3_coordinator_fixture -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
