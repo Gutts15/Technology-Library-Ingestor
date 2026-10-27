@@ -701,7 +701,14 @@ def main() -> int:
     except RuntimeError as exc:
         errors.extend(code for code in str(exc).split(",") if code)
 
-        if acquired and write_boundary and journal is not None and not released:
+        if acquired and journal is not None and journal.get("state") == "COMMITTED":
+            # The canonical state and COMMITTED journal have already been
+            # readback-verified. Lost Git release ACK must NEVER turn a
+            # successful publication into a rollback. Recovery is a separate
+            # verified commit-release reconciliation on the next invocation.
+            report["state"] = "COMMITTED_RELEASE_UNCERTAIN"
+            errors.append("committed_release_reconciliation_required")
+        elif acquired and write_boundary and journal is not None and not released:
             recovered_ok, recovered_errors = persist_recovered_and_release(
                 remote=str(args.remote),
                 git_remote_url=str(args.git_remote_url),
