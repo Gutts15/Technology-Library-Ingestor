@@ -202,7 +202,7 @@ def compile_transaction(root: Path, raw_lote: bytes, lot_relative: str,
             except ValueError:
                 raise PreflightError("update_existing_record_invalid") from None
             if (current["record_id"] != record_id
-                    or current["type"] != header["TYPE"]
+                    or current["record_type"] != header["TYPE"]
                     or current["domain"] != header["DOMAIN"]
                     or current["category"] != header["CATEGORY"]
                     or normalize_title(current["title"]) != normalize_title(header["TITLE"])):
