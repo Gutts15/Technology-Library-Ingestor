@@ -81,6 +81,9 @@ jobs:
       - name: Verify exact Git owner before any remote E3 rollback
         run: python3 -m unittest tests.test_e3_remote_owner_recovery -q
 
+      - name: Verify committed E3 recovery and lost-ACK Git release reconciliation
+        run: python3 -m unittest tests.test_candidate_committed_reconciliation -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
