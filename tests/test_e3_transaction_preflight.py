@@ -133,8 +133,54 @@ class E3PreflightTests(unittest.TestCase):
         self.assertEqual(result["writes_simulated"], 1)
         self.assertEqual((self.root / self.canonical_path).read_bytes(), self.original)
         row["record_markdown"] = updated.replace("React Bits provides animated React components.", "Old facts removed.")
-        with self.assertRaisesRegex(e3.PreflightError, "update_drops_existing_content"):
-            e3.simulate(self.root, self.lote_raw, self.path, self.decision_bytes(row))
+        plan, staged, _, _ = e3.compile_transaction(
+            self.root, self.lote_raw, self.path, self.decision_bytes(row))
+        merged = staged[plan["items"][0]["content_path"]].decode("utf-8")
+        self.assertIn(self.original.decode().strip(), merged)
+        self.assertIn("Animated React components", merged)
+        self.assertNotIn("Old facts removed", merged)
+        self.assertEqual((self.root / self.canonical_path).read_bytes(), self.original)
+
+    def test_append_update_preserves_reference_status(self):
+        base = self.original.replace(b"STATUS: TEST", b"STATUS: REFERENCE")
+        self.write(self.canonical_path, base)
+        from library_index_build import planned_indexes, validate_record
+        for path, raw in planned_indexes(
+                [validate_record(self.canonical_path, base)]).items():
+            self.write(path, raw)
+        self.item["evidence_compact"]["evidence"]["samples"] = [
+            "React Bits provides animated React components."
+        ]
+        self.item["matches"] = [{"record_id": "0123456789abcdef0123", "title": "React Bits"}]
+        self.lote["items_sha256"] = hashlib.sha256(encode(self.lote["itens"])).hexdigest()
+        self.lote_raw = encode(self.lote)
+        proposal = base.decode().replace("STATUS: REFERENCE", "STATUS: TEST")
+        row = self.decision(
+            "UPDATE", motivo=None, confianca=0.95,
+            record_type="TECHNOLOGY", route="02_WEB_DEVELOPMENT/UI_COMPONENTS",
+            target_record_id="0123456789abcdef0123",
+            record_markdown=proposal,
+            claims=[{"text": "Animated React components", "evidence_quote": "animated React components"}])
+        plan, staged, _, _ = e3.compile_transaction(
+            self.root, self.lote_raw, self.path, self.decision_bytes(row))
+        merged = staged[plan["items"][0]["content_path"]]
+        self.assertIn(b"STATUS: REFERENCE", merged)
+        self.assertTrue(merged.startswith(base.rstrip(b"\\n")))
+        self.assertIn(b"Evidence excerpt", merged)
+        self.assertEqual((self.root / self.canonical_path).read_bytes(), base)
+
+    def test_append_update_rejects_claim_with_markdown_injection(self):
+        with self.assertRaisesRegex(e3.PreflightError, "update_claim_unsafe"):
+            e3.append_verified_claims(
+                self.original,
+                [{"text": "Feature [click](https://unsafe.example)", "evidence_quote": "supported quote"}])
+
+    def test_append_update_rejects_duplicate_claim_in_record(self):
+        with self.assertRaisesRegex(e3.PreflightError, "update_claim_already_present"):
+            e3.append_verified_claims(
+                self.original,
+                [{"text": "React Bits provides animated React components.",
+                  "evidence_quote": "animated React components"}])
 
     def test_research_type_not_canonical(self):
         row = self.create_row()
