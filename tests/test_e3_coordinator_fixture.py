@@ -111,6 +111,44 @@ class CoordinatorRecoveryTests(unittest.TestCase):
             run_fixture(self.root, other, self.raw, self.relative, self.decisions)
         self.assertFalse(self.new_file.exists())
 
+    def test_acquire_push_lost_ack_never_mutates_records(self):
+        from unittest.mock import patch
+        import candidate_production_coordinator as coord
+        actual_push = coord._push_expected
+        def send_but_lose_ack(work, sha):
+            self.assertTrue(actual_push(work, sha))
+            return False
+        with patch.object(coord, "_push_expected", side_effect=send_but_lose_ack):
+            with self.assertRaisesRegex(CoordinatorFixtureError, "coordinator_acquire_failed"):
+                run_fixture(self.root, self.git, self.raw, self.relative, self.decisions)
+        observed = self.state()
+        self.assertEqual(observed["state"], "ACTIVE")
+        self.assertFalse(observed["canonical_write_performed"])
+        self.assertFalse(self.new_file.exists())
+        self.assertEqual(self.master.read_bytes(), self.master_initial)
+
+    def test_write_boundary_push_lost_ack_fails_closed(self):
+        from unittest.mock import patch
+        import candidate_production_coordinator as coord
+        actual_push = coord._push_expected
+        count = 0
+        def send_with_second_ack_lost(work, sha):
+            nonlocal count
+            count += 1
+            result = actual_push(work, sha)
+            return result if count == 1 else False
+        with patch.object(coord, "_push_expected", side_effect=send_with_second_ack_lost):
+            with self.assertRaisesRegex(CoordinatorFixtureError, "coordinator_start_uncertain"):
+                run_fixture(self.root, self.git, self.raw, self.relative, self.decisions)
+        self.assertEqual(count, 2)
+        self.assertTrue(self.state()["canonical_write_performed"])
+        self.assertFalse(self.new_file.exists())
+        journal = load_journal(self.root, self.tx)
+        self.assertEqual(journal["state"], "PREPARED")
+        with self.assertRaisesRegex(CoordinatorFixtureError, "uncertain_prewrite_boundary"):
+            resume_fixture(self.root, self.git, self.tx, self.batch)
+        self.assertEqual(self.state()["state"], "ACTIVE")
+
     def test_git_timeout_is_bounded_and_not_treated_as_success(self):
         from unittest.mock import patch
         from candidate_production_coordinator import git
