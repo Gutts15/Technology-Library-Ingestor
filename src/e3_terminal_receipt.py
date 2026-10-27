@@ -54,6 +54,8 @@ def build_terminal_receipt(
     index_status = "UNCHANGED"
     rows_by_id: dict[str, dict] = {}
     journal_entries: dict[str, dict] = {}
+    terminal_transaction_id = None
+    terminal_commit_receipt_sha = None
 
     if written:
         if not isinstance(commit_journal, dict) or not isinstance(verified_receipt_raw, bytes):
@@ -109,6 +111,8 @@ def build_terminal_receipt(
         if live_master is None or sha(live_master) != master_after:
             raise SettlementError("master_commit_changed")
         index_status = "VERIFIED"
+        terminal_transaction_id = tx
+        terminal_commit_receipt_sha = sha(verified_receipt_raw)
     else:
         if commit_journal is not None or verified_receipt_raw is not None:
             raise SettlementError("unexpected_commit_for_nonwrite")
@@ -155,6 +159,8 @@ def build_terminal_receipt(
               "resultados": outcomes, "index_verification": index_status,
               "master_before_sha256": master_before,
               "master_after_sha256": master_after,
+              "transaction_id": terminal_transaction_id,
+              "commit_receipt_sha256": terminal_commit_receipt_sha,
               "canonical_write_performed_by_receipt_planner": False}
     if len(encode(result)) > 120 * 1024:
         raise SettlementError("terminal_receipt_too_large")
