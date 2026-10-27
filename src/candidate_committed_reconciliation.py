@@ -204,22 +204,19 @@ def classify_restart(journal: dict | None, coordinator: dict | None, *,
     if state == "COMMITTED":
         if receipt_raw is None:
             return "BLOCKED", ["committed_receipt_unavailable"]
-        result, errors = reconcile_committed_release(
-            journal, receipt_raw,
-            read_canonical=read_canonical, read_private=read_snapshot,
-            read_owner=lambda: (None, coordinator, []),
-            release_once=lambda **_: ["classification_read_only"],
-        )
-        if result == "ALREADY_RELEASED":
-            return "ALREADY_RELEASED", []
-        if result == "UNCERTAIN" and not errors and coordinator.get("state") == "ACTIVE":
-            return "RECONCILE_COMMITTED", []
-        # A read-only classification must not actually call a release; detect
-        # verified ACTIVE identity and return its route explicitly.
         errors = proof_errors(journal, receipt_raw,
                               read_canonical=read_canonical, read_private=read_snapshot)
         if errors:
             return "BLOCKED", errors
+        if coordinator.get("state") == "FREE":
+            result, mismatch = reconcile_committed_release(
+                journal, receipt_raw, read_canonical=read_canonical,
+                read_private=read_snapshot,
+                read_owner=lambda: (None, coordinator, []),
+                release_once=lambda **_: (_ for _ in ()).throw(
+                    AssertionError("read_only_classifier_cannot_release")),
+            )
+            return ("ALREADY_RELEASED", []) if result == "ALREADY_RELEASED" else ("BLOCKED", mismatch)
         if (coordinator.get("state") == "ACTIVE"
                 and coordinator.get("canonical_write_performed") is True
                 and all(coordinator.get(k) == journal[k] for k in keys)):
