@@ -33,6 +33,9 @@ jobs:
       - name: Test E1 lot assembler with synthetic evidence only
         run: python3 -m unittest tests.test_e1_lote_prepare -q
 
+      - name: Test isolated E2 decisions with synthetic evidence only
+        run: python3 -m unittest tests.test_e2_gemini_decide tests.test_cost_guardrail_g03b -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
