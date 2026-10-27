@@ -36,6 +36,9 @@ jobs:
       - name: Test isolated E2 decisions with synthetic evidence only
         run: python3 -m unittest tests.test_e2_gemini_decide tests.test_cost_guardrail_g03b -q
 
+      - name: Test E3 in-memory transaction simulation with synthetic records
+        run: python3 -m unittest tests.test_e3_transaction_preflight -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
