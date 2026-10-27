@@ -72,6 +72,9 @@ jobs:
       - name: Test uncertain Drive timeout never authorizes rollback
         run: python3 -m unittest tests.test_e3_remote_timeout_safety -q
 
+      - name: Test synthetic two-item E3 committed Drive fixture contract
+        run: python3 -m unittest tests.test_e3_drive_committed_fixture -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
