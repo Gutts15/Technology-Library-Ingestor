@@ -25,6 +25,12 @@ class G03BCostGuardrailTests(unittest.TestCase):
         self.assertEqual([], self.scan("src/e2_gemini_decide.py", "GEMINI_API_KEY"))
         self.assertIn("gemini_api_secret", self.scan("src/e2_gemini_decide.py", "GOOGLE_API_KEY"))
 
+    def test_e2_synthetic_workflow_only_allows_gemini(self):
+        path = ".github/workflows/e2-synthetic-gemini-smoke.yml"
+        self.assertEqual([], self.scan(path, "GEMINI_API_KEY"))
+        self.assertIn("gemini_api_secret", self.scan(path, "GOOGLE_API_KEY"))
+        self.assertIn("openai_api_secret", self.scan(path, "OPENAI_API_KEY"))
+
     def test_other_providers_and_generic_google_key_stay_blocked(self):
         for name in ('OPENAI_API_KEY', 'GOOGLE_API_KEY'):
             self.assertTrue(self.scan('.github/workflows/g03b-gemini-receipt.yml', name))

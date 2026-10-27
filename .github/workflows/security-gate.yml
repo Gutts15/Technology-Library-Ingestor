@@ -57,6 +57,9 @@ jobs:
       - name: Test E3 local Git CAS coordinator and recovery isolation
         run: python3 -m unittest tests.test_e3_coordinator_fixture -q
 
+      - name: Test E2 synthetic Gemini acceptance wrapper without external calls
+        run: python3 -m unittest tests.test_e2_synthetic_smoke -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 

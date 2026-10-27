@@ -86,7 +86,8 @@ def scan_file(path: Path, root: Path) -> list[str]:
             # E2 is not scheduled in its isolated PR. Other key names remain blocked.
             if (code == "gemini_api_secret"
                     and relative in {Path(".github/workflows/g03b-gemini-receipt.yml"),
-                                     Path("src/e2_gemini_decide.py")}
+                                     Path("src/e2_gemini_decide.py"),
+                                     Path(".github/workflows/e2-synthetic-gemini-smoke.yml")}
                     and not re.search(r"\bGOOGLE_API_KEY\b", text, re.IGNORECASE)):
                 continue
             findings.append(code)
