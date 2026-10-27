@@ -198,8 +198,14 @@ def prepare(store: Storage, day: str) -> tuple[dict | None, str | None, int]:
             held += 1
             continue
         semantic = usable_summary(binding["kind"], binding["semantic_summary"])
-        compact = {key: semantic[key] for key in ("evidence", "link", "content", "extraction")
-                   if key in semantic}
+        # Only approved, compacted evidence is allowed to leave the runner in E2.
+        # Source names, provider IDs and raw extraction metadata are excluded.
+        compact = {"evidence": semantic.get("evidence", {})}
+        if binding["kind"] == "link" and "public_link" in assessment["allowed_channels"]:
+            link = semantic.get("link")
+            url = link.get("url_without_query_or_fragment") if isinstance(link, dict) else None
+            if isinstance(url, str) and url.startswith(("https://", "http://")):
+                compact["public_url"] = url
         if len(encode(compact)) > 3000:
             held += 1
             continue
@@ -225,8 +231,9 @@ def prepare(store: Storage, day: str) -> tuple[dict | None, str | None, int]:
     filename = "lote.json" if number == 1 else f"lote-{number:02d}.json"
     result = {"schema_version": 1, "lote_id": f"{day}-{number:02d}",
               "created_at_utc": datetime.now(timezone.utc).isoformat(),
-              "created_date_brt": day, "status": "PRONTO", "itens": selected}
-    # E2 must hash the final serialized lote.json bytes, not a self-referential field.
+              "created_date_brt": day, "status": "PRONTO", "itens": selected,
+              "items_sha256": hashlib.sha256(encode(selected)).hexdigest()}
+    # E2 separately hashes the final serialized lote.json bytes.
     if len(encode(result)) > 200 * 1024:
         raise PreparationError("lote_budget")
     return result, LOTES + "/" + day + "/" + filename, held
