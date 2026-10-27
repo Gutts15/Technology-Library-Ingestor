@@ -1,0 +1,50 @@
+name: E3 integrated private Drive commit acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/e3-integrated-commit-acceptance.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-e3-private-integrated-commit
+  cancel-in-progress: false
+
+jobs:
+  e3_drive_commit:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install remote storage client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq >/dev/null 2>&1
+          sudo apt-get install -y -qq rclone >/dev/null 2>&1
+
+      - name: Configure Drive client for disposable synthetic prefix only
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TL_RCLONE_CONFIG:-}" ]; then
+            echo "e3_remote_commit status=SECRET_MISSING canonical_write=0"
+            exit 2
+          fi
+          umask 077
+          printf '%s' "$TL_RCLONE_CONFIG" > "$RUNNER_TEMP/tl-rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/tl-rclone.conf" >> "$GITHUB_ENV"
+
+      - name: Verify CREATE UPDATE commit journal and receipt over real Drive
+        run: |
+          set -euo pipefail
+          python3 src/e3_drive_committed_fixture.py
