@@ -1,0 +1,40 @@
+name: E2 synthetic Gemini integration smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/e2-synthetic-gemini-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-e2-synthetic-smoke
+  cancel-in-progress: false
+
+jobs:
+  e2_synthetic:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install storage client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq >/dev/null 2>&1
+          sudo apt-get install -y -qq rclone >/dev/null 2>&1
+
+      - name: One synthetic E2 model and Drive receipt, no canonical mutation
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+          E2_SMOKE_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 scripts/e2_synthetic_gemini_smoke.py
