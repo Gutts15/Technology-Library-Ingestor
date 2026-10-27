@@ -240,7 +240,8 @@ def recover_fixture(root: Path, transaction_id: str):
 
 
 def exercise_fixture(root: Path, raw_lot: bytes, relative: str,
-                     raw_decisions: bytes, *, fail_on_write: int = 0):
+                     raw_decisions: bytes, *, fail_on_write: int = 0,
+                     before_canonical_write=None):
     with guard(root):
         plan, staged, before_paths, journal = prepare_fixture(
             root, raw_lot, relative, raw_decisions)
@@ -249,6 +250,11 @@ def exercise_fixture(root: Path, raw_lot: bytes, relative: str,
         tx_id = journal["transaction_id"]
         touched = {e["target_path"] for e in journal["items"]}
         touched.update(e["path"] for e in journal["indexes"])
+        # The callback may bind the exact active Git coordinator lease before
+        # the durable write-start journal and before any canonical mutation.
+        # A failed/uncertain callback aborts without releasing the owner.
+        if before_canonical_write is not None:
+            before_canonical_write(journal)
         journal["state"] = "WRITING_RECORDS"
         journal["canonical_write_performed"] = True
         persist_journal(root, journal)
