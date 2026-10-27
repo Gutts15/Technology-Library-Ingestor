@@ -11,10 +11,13 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from e1_lote_prepare import encode
 from e2_gemini_decide import MODEL, DecisionError, ask_gemini, validate_model_output
