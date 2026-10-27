@@ -161,7 +161,10 @@ def compile_transaction(root: Path, raw_lote: bytes, lot_relative: str,
             condition = "EXACT_BASE_SHA"
         content_path = PATH_PREFIX + item["item_id"] + ".md"
         staged[content_path] = raw
-        planned.append({"lane": "E3", "action": action, "candidate_id": item["item_id"],
+        planned.append({"lane": "NEW" if action == "CREATE" else "UPDATE",
+                        "action": action, "candidate_id": item["item_id"],
+                        "package_id": item["package_id"],
+                        "revision_key": item["revision_key"],
                         "record_id": record_id, "target_path": target,
                         "content_path": content_path, "content_sha256": checksum(raw),
                         "base_sha256": base_sha, "precondition": condition})

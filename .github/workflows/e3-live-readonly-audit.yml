@@ -1,0 +1,62 @@
+name: E3 live Drive canonical read-only audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      inspect_pending:
+        description: 'Also simulate the oldest pending E2 lot without writes'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/e3-live-readonly-audit.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-e3-live-readonly-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install storage client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq >/dev/null 2>&1
+          sudo apt-get install -y -qq rclone >/dev/null 2>&1
+
+      - name: Configure private Drive read-only inspection
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TL_RCLONE_CONFIG:-}" ]; then
+            echo "e3_audit status=BLOCKED code=SECRET_MISSING canonical_write=0"
+            exit 2
+          fi
+          umask 077
+          printf '%s' "$TL_RCLONE_CONFIG" > "$RUNNER_TEMP/tl-rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/tl-rclone.conf" >> "$GITHUB_ENV"
+
+      - name: Confirm actual Library indexes without mutations
+        env:
+          INSPECT_PENDING: ${{ inputs.inspect_pending }}
+        run: |
+          set -euo pipefail
+          if [ "${INSPECT_PENDING:-}" = "true" ]; then
+            python3 src/e3_remote_readonly_audit.py --remote tl: --inspect-pending
+          else
+            python3 src/e3_remote_readonly_audit.py --remote tl:
+          fi

@@ -60,6 +60,12 @@ jobs:
       - name: Test E2 synthetic Gemini acceptance wrapper without external calls
         run: python3 -m unittest tests.test_e2_synthetic_smoke -q
 
+      - name: Verify read-only E3 canonical Drive audit with synthetic fixtures
+        run: python3 -m unittest tests.test_e3_remote_readonly_audit -q
+
+      - name: Test E3 CREATE/UPDATE compatibility with real receipt validator
+        run: python3 -m unittest tests.test_e3_receipt_contract -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
