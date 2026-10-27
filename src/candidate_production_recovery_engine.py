@@ -119,6 +119,37 @@ def validate_recovery_journal(journal: dict[str, Any] | None) -> list[str]:
     return sorted(set(errors))
 
 
+def verify_rollback_preconditions(
+    journal: dict[str, Any] | None, *,
+    read_canonical: ReadBytes, read_snapshot: ReadBytes,
+) -> list[str]:
+    """Prove all observed paths are exactly before/expected-after before writing.
+
+    This is a strict cross-file preflight, not a substitute for a durable
+    shared-owner fence. Legacy journals without expected after hashes cannot
+    authorize automatic rollback of remote canonical state.
+    """
+    errors = validate_recovery_journal(journal)
+    if errors or not isinstance(journal, dict):
+        return errors or ["journal_invalid"]
+    for group, key in (("items", "target_path"), ("indexes", "path")):
+        for entry in journal[group]:
+            path = entry[key]
+            after = entry.get("after_sha256")
+            if not _valid_sha(after):
+                return ["recovery_expected_after_missing"]
+            observed = read_canonical(path)
+            observed_sha = sha256(observed) if observed is not None else None
+            before = entry["before_sha256"]
+            if observed_sha not in {before, after}:
+                return ["recovery_external_conflict"]
+            if entry["existed_before"]:
+                snapshot = read_snapshot(entry["snapshot_path"])
+                if snapshot is None or sha256(snapshot) != before:
+                    return ["recovery_snapshot_unverified"]
+    return []
+
+
 def execute_recovery(
     journal: dict[str, Any] | None,
     *,
@@ -126,10 +157,16 @@ def execute_recovery(
     read_snapshot: ReadBytes,
     write_canonical: WriteBytes,
     delete_canonical: DeletePath,
+    verify_current_state: bool = False,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     errors = validate_recovery_journal(journal)
     if errors or not isinstance(journal, dict):
         return None, errors or ["journal_invalid"]
+    if verify_current_state:
+        errors = verify_rollback_preconditions(
+            journal, read_canonical=read_canonical, read_snapshot=read_snapshot)
+        if errors:
+            return None, errors
 
     restored = 0
     removed = 0

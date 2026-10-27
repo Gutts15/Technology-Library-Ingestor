@@ -75,6 +75,9 @@ jobs:
       - name: Test synthetic two-item E3 committed Drive fixture contract
         run: python3 -m unittest tests.test_e3_drive_committed_fixture -q
 
+      - name: Test preflight of all E3 rollback hashes before remote mutation
+        run: python3 -m unittest tests.test_e3_strict_recovery -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
