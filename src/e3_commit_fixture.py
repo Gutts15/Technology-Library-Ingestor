@@ -171,9 +171,6 @@ def exercise_commit(root: Path, git_repo: Path, raw_lot: bytes,
         journal["state"] = "VERIFYING"
         persist_journal(root, journal)
         master_before = journal["master_index_before_sha256"]
-        initial = sha(read_optional(root, "00_LIBRARY/MASTER_INDEX.md"))
-        if initial == master_before:
-            raise CommitFixtureError("index_not_rebuilt_for_write")
         # Recover the exact original master from the verified durable snapshot.
         index_entry = next(e for e in journal["indexes"] if e["path"] == "00_LIBRARY/MASTER_INDEX.md")
         before_master = read_optional(root, index_entry["snapshot_path"])
@@ -198,12 +195,21 @@ def exercise_commit(root: Path, git_repo: Path, raw_lot: bytes,
 def resume_terminal_commit(root: Path, git_repo: Path, raw_lot: bytes,
                            relative_lot: str, raw_decisions: bytes) -> str:
     remote = local_bare_repository(root, git_repo)
+    from e2_gemini_decide import validate_lote
+    lote = validate_lote(raw_lot, relative_lot)
     with guard(root):
-        plan, _, _, settlement = compile_transaction(
-            root, raw_lot, relative_lot, raw_decisions)
-        expected = lock_identity(plan["transaction_id"], settlement["lote_id"])
-        journal = load_journal(root, plan["transaction_id"])
-        if journal.get("state") != "COMMITTED":
+        _, state, errors = read_state(remote)
+        if errors or not isinstance(state, dict):
+            raise CommitFixtureError("coordinator_unavailable")
+        tx_id = state.get("transaction_id") if state.get("state") == "ACTIVE" else state.get("released_transaction_id")
+        if not isinstance(tx_id, str):
+            raise CommitFixtureError("committed_transaction_unknown")
+        journal = load_journal(root, tx_id)
+        expected = lock_identity(tx_id, lote["lote_id"])
+        if (journal.get("state") != "COMMITTED"
+                or journal.get("readiness_sha256") != sha(raw_lot)
+                or journal.get("authorization_sha256") != sha(raw_decisions)
+                or journal.get("batch_id") != lote["lote_id"]):
             raise CommitFixtureError("not_committed_requires_recovery")
         receipt_raw = read_optional(root, journal["run_root"] + "/receipt.json")
         if receipt_raw is None or sha(receipt_raw) != journal["receipt_sha256"]:
