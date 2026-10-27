@@ -69,6 +69,9 @@ jobs:
       - name: Test complete E3 durable synthetic commit and verified terminal receipt
         run: python3 -m unittest tests.test_e3_commit_fixture -q
 
+      - name: Test uncertain Drive timeout never authorizes rollback
+        run: python3 -m unittest tests.test_e3_remote_timeout_safety -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
