@@ -111,6 +111,15 @@ class CoordinatorRecoveryTests(unittest.TestCase):
             run_fixture(self.root, other, self.raw, self.relative, self.decisions)
         self.assertFalse(self.new_file.exists())
 
+    def test_git_timeout_is_bounded_and_not_treated_as_success(self):
+        from unittest.mock import patch
+        from candidate_production_coordinator import git
+        with patch("candidate_production_coordinator.subprocess.run",
+                   side_effect=subprocess.TimeoutExpired(["git", "ls-remote"], 40)) as proc:
+            outcome = git(["ls-remote", str(self.git)])
+        self.assertEqual(outcome.returncode, 124)
+        self.assertEqual(proc.call_args.kwargs["timeout"], 40)
+
     def test_nonwrite_does_not_acquire_coordinator(self):
         neutral = self.fixture.decision_bytes(self.fixture.decision())
         result, tx = run_fixture(self.root, self.git, self.raw, self.relative, neutral)
