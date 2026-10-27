@@ -78,6 +78,9 @@ jobs:
       - name: Test preflight of all E3 rollback hashes before remote mutation
         run: python3 -m unittest tests.test_e3_strict_recovery -q
 
+      - name: Verify exact Git owner before any remote E3 rollback
+        run: python3 -m unittest tests.test_e3_remote_owner_recovery -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
