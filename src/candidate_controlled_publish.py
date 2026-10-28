@@ -14,7 +14,7 @@ The command then performs the exact sealed transaction, rebuilds generated index
 verifies canonical bytes, persists a verified receipt + COMMITTED journal, and only
 then releases the coordinator.
 
-Any ordinary failure after the write boundary immediately enters deterministic rollback.
+Only a confirmed deterministic failure after the write boundary may enter rollback. Uncertain remote acknowledgements stop the runner and retain active Git ownership for later reconciliation.
 A hard process interruption leaves the durable ACTIVE coordinator + recovery journal for
 fresh-process recovery, as proven in Stage 11G.
 """
@@ -45,7 +45,7 @@ from candidate_production_coordinator import (
 )
 from candidate_production_recovery_engine import execute_recovery
 from candidate_publish_authorization import parse_readiness
-from candidate_remote_recovery_probe import join_remote, remote_cat, remote_copy_bytes, run_rclone
+from candidate_remote_recovery_probe import RemoteUncertainExit, join_remote, remote_cat, remote_copy_bytes, run_rclone
 from candidate_stage_12a_preflight import (
     READY_STATE as STAGE12A_READY_STATE,
     executor_fingerprints,
@@ -237,8 +237,12 @@ def _private_write_exact(
     if not safe_recovery_path(path):
         return False
     if not remote_copy_bytes(remote, path, raw, final_path=final_path):
-        return False
-    return remote_cat(remote, path) == raw
+        # False is not proof of a failed remote write. The provider may
+        # have stored the bytes but lost the acknowledgement.
+        raise RemoteUncertainExit()
+    if remote_cat(remote, path) != raw:
+        raise RemoteUncertainExit()
+    return True
 
 
 def persist_journal(remote: str, journal: dict[str, Any]) -> bool:
@@ -274,8 +278,12 @@ def canonical_atomic_writer(remote: str, run_root: str):
             ]
         )
         if moved.returncode != 0:
-            return False
-        return remote_cat(remote, path) == raw
+            # Nonzero moveto can be an applied move with a lost response.
+            # Do not run an immediate rollback while a Drive move may finish.
+            raise RemoteUncertainExit()
+        if remote_cat(remote, path) != raw:
+            raise RemoteUncertainExit()
+        return True
 
     return write
 
@@ -284,8 +292,10 @@ def canonical_delete(remote: str, path: str) -> bool:
     if not isinstance(path, str) or not path.startswith("00_LIBRARY/") or ".." in PurePosixPath(path).parts:
         return False
     result = run_rclone(["deletefile", join_remote(remote, path), "--log-level", "ERROR"])
-    if result.returncode != 0 and remote_cat(remote, path) is not None:
-        return False
+    if result.returncode != 0:
+        raise RemoteUncertainExit()
+    # A confirmed delete still requires a bounded readback check. Failure to
+    # prove absence remains a recovery error, never silent success.
     return remote_cat(remote, path) is None
 
 
