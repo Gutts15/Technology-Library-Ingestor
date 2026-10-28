@@ -84,6 +84,9 @@ jobs:
       - name: Verify committed E3 recovery and lost-ACK Git release reconciliation
         run: python3 -m unittest tests.test_candidate_committed_reconciliation -q
 
+      - name: Verify E3 ambiguous remote copy or move never triggers blind rollback
+        run: python3 -m unittest tests.test_e3_uncertain_move -q
+
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
 
