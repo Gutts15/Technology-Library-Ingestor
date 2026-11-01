@@ -108,6 +108,39 @@ class LotSidecarStateTests(unittest.TestCase):
         self.assertEqual(a, "2026-10-27/decisoes-02.json")
         self.assertEqual(b, "2026-10-27/recibo-02.json")
 
+    def write_settlement(self, action):
+        decisions = self.response()
+        choice = decisions["decisoes"][0]
+        choice.update(acao=action, target_record_id="a" * 20 if action == "UPDATE" else None)
+        raw = encode(decisions)
+        from e2_gemini_decide import expected_record_id
+        receipt = build_terminal_receipt(self.raw, self.relative, encode(self.response()),
+                                         commit_journal=None, verified_receipt_raw=None)
+        receipt.update(decisoes_sha256=hashlib.sha256(raw).hexdigest(),
+                       index_verification="VERIFIED", master_before_sha256="b" * 64,
+                       master_after_sha256="c" * 64, transaction_id="d" * 20,
+                       commit_receipt_sha256="e" * 64)
+        receipt["resultados"][0].update(
+            acao=action, record_id=choice["target_record_id"] if action == "UPDATE"
+            else expected_record_id(choice["item_id"]),
+            before_sha256="f" * 64 if action == "UPDATE" else None,
+            after_sha256="1" * 64)
+        return raw, receipt
+
+    def test_valid_write_identities_settle(self):
+        for action in ("CREATE", "UPDATE"):
+            with self.subTest(action=action):
+                raw, receipt = self.write_settlement(action)
+                self.assertTrue(verify_settlement(self.raw, self.relative, raw, encode(receipt))["settled"])
+
+    def test_wrong_write_record_identity_rejected(self):
+        for action in ("CREATE", "UPDATE"):
+            with self.subTest(action=action):
+                raw, receipt = self.write_settlement(action)
+                receipt["resultados"][0]["record_id"] = "9" * 20
+                with self.assertRaisesRegex(LotStateError, "result_record_identity_invalid"):
+                    verify_settlement(self.raw, self.relative, raw, encode(receipt))
+
     def test_write_sidecar_has_no_concurrent_reexecution(self):
         from e1_lote_prepare import past_state
         _, receipt = self.create_sidecar()
@@ -119,3 +152,4 @@ class LotSidecarStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
