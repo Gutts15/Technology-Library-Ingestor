@@ -141,6 +141,25 @@ class LotSidecarStateTests(unittest.TestCase):
                 with self.assertRaisesRegex(LotStateError, "result_record_identity_invalid"):
                     verify_settlement(self.raw, self.relative, raw, encode(receipt))
 
+    def test_missing_update_target_rejected(self):
+        import json
+        raw, receipt = self.write_settlement("UPDATE")
+        decisions = json.loads(raw)
+        decisions["decisoes"][0]["target_record_id"] = None
+        raw = encode(decisions)
+        receipt["decisoes_sha256"] = hashlib.sha256(raw).hexdigest()
+        with self.assertRaisesRegex(LotStateError, "decision_update_target_invalid"):
+            verify_settlement(self.raw, self.relative, raw, encode(receipt))
+
+    def test_e1_does_not_skip_item_with_wrong_committed_record(self):
+        from e1_lote_prepare import past_state
+        raw, receipt = self.write_settlement("UPDATE")
+        receipt["resultados"][0]["record_id"] = "9" * 20
+        self.store.create(LOTES + "/" + self.decisions_rel, raw)
+        self.store.create(LOTES + "/" + self.receipt_rel, encode(receipt))
+        with self.assertRaisesRegex(PreparationError, "settlement_invalid"):
+            past_state(self.store)
+
     def test_write_sidecar_has_no_concurrent_reexecution(self):
         from e1_lote_prepare import past_state
         _, receipt = self.create_sidecar()
@@ -152,4 +171,3 @@ class LotSidecarStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
