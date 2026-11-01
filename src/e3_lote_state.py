@@ -89,6 +89,7 @@ def verify_settlement(
         raise LotStateError("lot_duplicate_items")
     expected_ids = set(item_ids)
     actions: dict[str, str] = {}
+    record_ids: dict[str, str] = {}
     for choice in choices:
         if not isinstance(choice, dict):
             raise LotStateError("decision_item_invalid")
@@ -96,6 +97,13 @@ def verify_settlement(
         if not isinstance(key, str) or key not in expected_ids or key in actions or act not in ACTIONS:
             raise LotStateError("decision_item_unbound")
         actions[key] = act
+        if act == "CREATE":
+            record_ids[key] = hashlib.sha256(("e2-record-v1|" + key).encode("ascii")).hexdigest()[:20]
+        elif act == "UPDATE":
+            target = choice.get("target_record_id")
+            if not isinstance(target, str) or not HEX20.fullmatch(target):
+                raise LotStateError("decision_update_target_invalid")
+            record_ids[key] = target
     seen: set[str] = set()
     changed = 0
     for result in results:
@@ -113,6 +121,8 @@ def verify_settlement(
                     or (act == "CREATE" and before is not None)
                     or (act == "UPDATE" and (not isinstance(before, str) or not HEX64.fullmatch(before)))):
                 raise LotStateError("result_write_hash_invalid")
+            if record != record_ids[key]:
+                raise LotStateError("result_record_identity_invalid")
         elif any(v is not None for v in (before, after, record)):
             raise LotStateError("result_nonwrite_hash_invalid")
     if changed:
