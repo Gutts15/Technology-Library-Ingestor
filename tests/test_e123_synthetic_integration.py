@@ -78,5 +78,57 @@ class SyntheticE123NonwriteIntegration(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class SyntheticMediaDispositionIntegration(unittest.TestCase):
+    """Qualifies extracted evidence contracts, not decoders or live models."""
+
+    def test_media_evidence_dispositions_settle_and_do_not_reprocess(self):
+        samples = (
+            ("text", {"samples": ["Synthetic tool supports bounded jobs."]}, {}),
+            ("document", {"samples": ["Synthetic tool supports bounded jobs."]}, {}),
+            ("image", {"ocr_sample": "Synthetic tool supports bounded jobs."}, {}),
+            ("spreadsheet", {"row_samples": [["Synthetic tool", "bounded jobs"]]}, {}),
+            ("audio", {"speech": [{"text": "Synthetic tool supports bounded jobs."}]},
+             {"transcript": {"signal": "high"}}),
+            ("video", {"ocr": [{"text": "Synthetic tool supports bounded jobs."}]}, {}),
+            ("link", {"samples": ["Synthetic tool supports bounded jobs."]}, {}),
+        )
+        for kind, evidence, quality in samples:
+            for action, reason in (("HOLD", "WEAK_EVIDENCE"), ("REJECT", "IRRELEVANT"),
+                                   ("UNCHANGED", "DUPLICATE")):
+                with self.subTest(kind=kind, action=action):
+                    base = TestE1Prepare("test_empty_index_yields_no_lote")
+                    base.setUp()
+                    try:
+                        initial_master = base.master.read_bytes()
+                        base.fixture(kind=kind, extra={"evidence": evidence, "quality": quality})
+                        lot, path, held = prepare(base.store, "2026-11-01")
+                        self.assertEqual(held, 0)
+                        self.assertEqual(lot["itens"][0]["kind"], kind)
+                        raw_lot = encode(lot)
+                        base.store.create(path, raw_lot)
+                        answer = {"decisoes": [{"item_id": lot["itens"][0]["item_id"],
+                            "acao": action, "motivo": reason, "confianca": 0.65,
+                            "record_type": None, "route": None, "target_record_id": None,
+                            "record_markdown": None, "claims": []}]}
+                        store = DecisionStore(base.root)
+                        self.assertEqual(decide(store, responses=answer, apply=True), (1, 1))
+                        relative = path[len(LOTES)+1:]
+                        decisions_path, receipt_path = related_paths(relative)
+                        raw_decisions = base.store.read(LOTES + "/" + decisions_path)
+                        receipt = build_terminal_receipt(raw_lot, relative, raw_decisions,
+                            commit_journal=None, verified_receipt_raw=None)
+                        base.store.create(LOTES + "/" + receipt_path, encode(receipt))
+                        self.assertTrue(verify_settlement(raw_lot, relative, raw_decisions,
+                                                         encode(receipt))["settled"])
+                        # Next cycle must not invoke a model or enqueue the same evidence.
+                        from unittest.mock import patch
+                        with patch("e2_gemini_decide.ask_gemini", side_effect=AssertionError("reanalysis")):
+                            self.assertEqual(decide(store, apply=True), (0, 0))
+                        self.assertIsNone(prepare(base.store, "2026-11-02")[0])
+                        self.assertEqual(base.master.read_bytes(), initial_master)
+                    finally:
+                        base.doCleanups()
+
+
 if __name__ == "__main__":
     unittest.main()
