@@ -140,4 +140,3 @@ def verify_settlement(
         raise LotStateError("nonwrite_proof_invalid")
     return {"lote_id": lote["lote_id"], "settled": True, "writes": changed,
             "decisions_path": decisions_path, "receipt_path": receipt_path}
-
