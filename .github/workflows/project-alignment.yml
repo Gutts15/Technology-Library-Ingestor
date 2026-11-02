@@ -20,3 +20,5 @@ jobs:
           persist-credentials: false
       - name: Validate Charter alignment
         run: python3 src/project_alignment_guard.py
+      - name: Verify approved real-operation acceptance cannot be weakened
+        run: python3 -m unittest tests.test_project_alignment_guard -q

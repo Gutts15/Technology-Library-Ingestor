@@ -1,8 +1,8 @@
 # Technology Library — Project Charter
 
-CHARTER_VERSION: 1.0  
+CHARTER_VERSION: 1.1
 STATUS: ACTIVE  
-LAST_UPDATED: 2026-09-23
+LAST_UPDATED: 2026-11-01
 
 ## North Star
 
@@ -16,7 +16,10 @@ Interesting technical information arrives in messy formats and is easy to lose, 
 
 ## Black-box success test
 
-A mixed backlog of 500 realistic inputs is placed in the private Drive inbox, including useful sources, duplicates, irrelevant files, accidental uploads, weak evidence, contradictory claims and malformed/unsupported items.
+V1 acceptance requires seven consecutive real scheduled operating days under the
+V1.2.0 specification, section 7. Inputs include useful sources, duplicates,
+irrelevant or accidental uploads, weak evidence and malformed/unsupported items.
+The 500-item scale test is outside V1; it is not a substitute for real operation.
 
 Without the user triggering processing, reviewing candidates, approving batches, keeping a PC on or manually publishing records, the system must:
 
@@ -33,6 +36,22 @@ Without the user triggering processing, reviewing candidates, approving batches,
 11. leave the resulting knowledge retrievable through the normal Technology Library routing path;
 12. keep private media, credentials and extracted private content out of the public code repository and public logs;
 13. require R$ 0 mandatory additional recurring cost under the intended normal operating mode.
+
+The seven-day run must demonstrate all of these observable cases:
+
+- an empty day completes E1, E2 and E3 without a new lot or error;
+- a useful new item produces CREATE, rebuilt/verified indexes and normal routed retrieval;
+- new knowledge produces UPDATE with the same RECORD_ID and preserved valid older claims;
+- a duplicate produces UNCHANGED without a new record or reanalysis;
+- irrelevant/accidental content produces automatic REJECT;
+- weak evidence produces automatic HOLD without a user task;
+- an ordinary model/quota/Actions failure recovers in the following cycle without loss or duplication;
+- Drive credentials work for more than eight days without manual renewal;
+- public logs/artifacts expose no private filename, identifier or content.
+
+Synthetic or local-only runs cannot satisfy these real operating-day criteria.
+Private receipts, recovery evidence and routing readback must support acceptance;
+only a sanitized aggregate proof and evidence-manifest digest may be public.
 
 The project is not complete until this black-box test passes.
 
@@ -105,6 +124,24 @@ A true change to the product objective requires all of:
 5. roadmap and contract updates before implementation.
 
 Silence, convenience, a local technical decision or approval of a sub-stage does not count as scope approval.
+
+## Approved acceptance revision — 1.0 to 1.1
+
+- Proposed change: replace only the V1 500-input scale threshold with the seven
+  consecutive real-day acceptance matrix above; retain automatic publication,
+  recovery, retrieval, privacy, zero routine human steps, no user PC and R$0.
+- Comparison: Charter 1.0 required the same end-to-end product experience plus
+  500 inputs. Charter 1.1 preserves that experience and all non-negotiables;
+  the scale test moves outside V1, while real scheduled operation, next-cycle
+  recovery and credentials lasting more than eight days remain blocking.
+- Owner approval provenance: the owner-approved V1.2.0 specification dated
+  2026-10-19 explicitly excludes the 500-item test and defines section 7 acceptance.
+  The owner's executive resumption request of 2026-11-01 explicitly directs
+  formal reconciliation under this scope-change policy and repeats these criteria.
+  This revision records that decision, not inferred approval from a technical PR.
+- Formal implementation: increment Charter to 1.1 and update the contract,
+  five-milestone roadmap and alignment guard together before production activation.
+- Acceptance remains NOT_RUN. This revision is not evidence of completion.
 
 ## Definition of done
 

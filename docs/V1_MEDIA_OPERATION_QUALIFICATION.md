@@ -2,7 +2,43 @@
 
 This document describes remaining work inside approved milestones 3 and 4. It does not add milestones, enable intake, or claim production acceptance.
 
-## Milestone 3: evidence contracts versus supported media
+## Milestone 3: actual extraction and local integrated qualification
+
+`e1_source_extract.extract_file` invokes the existing processors in a bounded
+Linux process group: input 32 MiB, artifacts 64 MiB/4096 entries, compact evidence
+and one shared wall deadline. Decoder descendants are killed before outputs are
+read; credentials and decoder stdout/stderr are excluded. It never accesses Drive
+or downloads a speech model.
+
+Actual encoded inputs generated during tests exercise text, DOCX XML, PDF through
+pdftotext, CSV, XLSX through openpyxl, PNG OCR and MP4 frame OCR through
+FFmpeg/Tesseract. These are real decoder invocations over generated inputs, not
+the user's backlog or live Gemini classification. Missing tools cause explicit
+test skips; Linux Security gate installs media and spreadsheet dependencies.
+
+`e1_source_prepare.prepare_sources` binds outputs to existing envelope/index/lot
+formats in a marked local private mirror. Content-addressed receipts prevent
+renamed duplicates from being decoded again and persist HELD outcomes. Foreign
+existing evidence is rejected before replacing its index. Originals are preserved.
+This local adapter does not establish shared cloud coordination or deployment.
+
+The integration test decodes a text file, prepares E1, supplies offline E2 decisions
+and executes CREATE followed by identity-preserving UPDATE through the existing
+durable E3 engine and local bare Git coordinator. It checks terminal receipts,
+master/domain routing, preserved older content and repeat without model calls or
+re-extraction. All generated inputs/artifacts remain temporary.
+
+Audio remains HELD without an explicitly supplied local speech model. Unverified
+links remain HELD rather than treating a URL as extracted content. Real speech
+transcription, fetched link evidence, live Gemini CREATE/UPDATE and the shared
+Drive/GitHub chain are still unproved V1 requirements.
+
+E2 now bounds its entire model exchange in a reaped subprocess, including missing
+or partial bodies, and shares a five-minute budget across the lot. Keys/evidence
+pass through stdin, never command arguments. Failure leaves the original lot and
+writes no partial decisions. No retry or paid fallback is introduced.
+
+## Existing synthetic disposition matrix
 
 The synthetic integration matrix exercises seven evidence kinds through E1, offline E2 decisions, the E3 immutable terminal sidecar, settlement verification and the next cycle. Each kind covers HOLD/WEAK_EVIDENCE, REJECT/IRRELEVANT and UNCHANGED/DUPLICATE: 21 scenarios. It checks no repeated model call, no repeated lot and unchanged canonical master bytes. The decisions are supplied fixtures; the test does not establish model classification quality.
 
@@ -30,7 +66,7 @@ Before activation verify that actual E1/E2/E3 invocations share the intended ser
 
 ## Finite completion criteria
 
-Use the approved V1.2.0 acceptance: seven consecutive real scheduled days, all required dispositions, grounded CREATE and identity-preserving UPDATE, repeat without reanalysis, ordinary-failure recovery, normal index routing/retrieval, Drive credentials surviving more than eight days without manual renewal, and no private data in public logs/artifacts. The old public Charter/contract/roadmap still mention the superseded 500-item test and require documentary reconciliation against the approved V1 scope; do not run that test or silently introduce another stage.
+Use the approved V1.2.0 acceptance: seven consecutive real scheduled days, all required dispositions, grounded CREATE and identity-preserving UPDATE, repeat without reanalysis, ordinary-failure recovery, normal index routing/retrieval, Drive credentials surviving more than eight days without manual renewal, and no private data in public logs/artifacts. Charter 1.1 formally records the owner-approved replacement of the 500-item scale test with this real acceptance matrix. Contract, roadmap and alignment guard are updated together; the North Star and all hard constraints remain intact. No additional milestone is introduced.
 
 No mandatory recurring charge, recurring human approval or always-on user PC is introduced. BLACK_BOX_STATUS remains NOT_RUN.
 
