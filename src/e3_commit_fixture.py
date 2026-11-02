@@ -117,10 +117,19 @@ def terminal_sidecar(root: Path, relative_lot: str, raw_lot: bytes, raw_decision
     return raw
 
 
+def coordinator_remote(root: Path, git_repo) -> str:
+    """Local bare Git for fixtures, or the private Drive lease (Marco 2/3)."""
+    if isinstance(git_repo, str) and git_repo.startswith("drive-lease:tl:"):
+        from e3_recovery_fixture import verify_fixture
+        verify_fixture(root)
+        return git_repo
+    return local_bare_repository(root, git_repo)
+
+
 def exercise_commit(root: Path, git_repo: Path, raw_lot: bytes,
                     relative_lot: str, raw_decisions: bytes, *, fail_on_write=0
                     ) -> tuple[str, str | None]:
-    remote = local_bare_repository(root, git_repo)
+    remote = coordinator_remote(root, git_repo)
     with guard(root):
         plan, _, _, settlement = compile_transaction(
             root, raw_lot, relative_lot, raw_decisions)
@@ -194,7 +203,7 @@ def exercise_commit(root: Path, git_repo: Path, raw_lot: bytes,
 
 def resume_terminal_commit(root: Path, git_repo: Path, raw_lot: bytes,
                            relative_lot: str, raw_decisions: bytes) -> str:
-    remote = local_bare_repository(root, git_repo)
+    remote = coordinator_remote(root, git_repo)
     from e2_gemini_decide import validate_lote
     lote = validate_lote(raw_lot, relative_lot)
     with guard(root):
