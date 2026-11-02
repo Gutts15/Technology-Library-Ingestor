@@ -374,6 +374,10 @@ def hold_decision(item: dict) -> dict:
             "target_record_id": None, "record_markdown": None, "claims": []}
 
 
+# Fixed reason codes of model answers converted to HOLD (no content), for logs.
+HOLD_CODES: dict[str, int] = {}
+
+
 def checked_or_hold(item: dict, reply: Any) -> dict:
     """Spec 4: when in doubt, HOLD. A model answer that breaks the contract
     or is not grounded becomes HOLD for that item instead of blocking the lot
@@ -385,7 +389,8 @@ def checked_or_hold(item: dict, reply: Any) -> dict:
         if not isinstance(rows, list) or len(rows) != 1:
             raise DecisionError("model_item_count_invalid")
         return validate_decision(item, rows[0])
-    except DecisionError:
+    except DecisionError as exc:
+        HOLD_CODES[str(exc)] = HOLD_CODES.get(str(exc), 0) + 1
         return hold_decision(item)
 
 

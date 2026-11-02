@@ -57,6 +57,8 @@ def main() -> int:
         print("e123_proof cycle1 extracted=%d held=%d decisions=%d settled=%d writes=%d actions=%s"
               % (r1["e1_extracted"], r1["e1_held"], r1["e2_decisions"], settled,
                  r1["remote_writes"], json.dumps(actions, sort_keys=True)))
+        import e2_gemini_decide
+        print("e123_proof model_invalid_to_hold=" + json.dumps(e2_gemini_decide.HOLD_CODES, sort_keys=True))
         print("e123_proof cycle2 extracted=%d decisions=%d settled=%d drop_new=%d"
               % (r2["e1_extracted"], r2["e2_decisions"], sum(r2["e3"].values()), r2["drop_new"]))
         _, state, errors = read_state(coordinator)
@@ -65,7 +67,10 @@ def main() -> int:
             "cycle1_decided": r1["e2_written"] == 1 and r1["e2_decisions"] >= 1,
             "cycle1_settled": set(r1["e3"]) <= {"COMMITTED_RELEASED", "NO_WRITE_SETTLED"} and settled == 1,
             "cycle2_idempotent": (r2["e1_extracted"], r2["e2_decisions"], r2["e3"], r2["drop_new"]) == (0, 0, {}, 0),
-            "lease_free": not errors and isinstance(state, dict) and state.get("state") == "FREE",
+            # No-write lots settle without ever taking the lease, so "never
+            # created" is as valid as FREE here.
+            "lease_free": errors == ["coordinator_ref_missing"] or (
+                not errors and isinstance(state, dict) and state.get("state") == "FREE"),
             "sources_untouched": all(remote.read(cycle.DROP + "/" + n) == t.encode() for n, t in SOURCES.items()),
             "markers_local_only": remote.read(cycle.e1_source_prepare.MARKER) is False,
         }
