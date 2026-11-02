@@ -1,8 +1,8 @@
 name: G0.3b Gemini receipt
 
 on:
-  schedule:
-    - cron: '0 8 * * *' # 05:00 America/Sao_Paulo (UTC-3)
+  # G0.3b passed 23-26/10/2026. Schedule retired at V1 activation so the
+  # daily cycle owns the free-tier quota; manual run kept for diagnosis.
   workflow_dispatch:
 
 permissions:

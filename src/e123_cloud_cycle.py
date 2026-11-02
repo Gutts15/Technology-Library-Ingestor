@@ -274,6 +274,27 @@ def select_sources(remote: Any, known: set[str], limit: int) -> tuple[list[dict]
     return unique[:limit], stats
 
 
+def extract_each(root: Path, paths: list[Path], day: str) -> dict[str, int]:
+    """One source per call, so a heavy or broken file cannot block the others
+    forever: it simply has no receipt and is retried next cycle. The lot is
+    built once at the end from everything extracted."""
+    from unittest.mock import patch
+    totals = {"extracted": 0, "duplicates": 0, "held": 0, "lotes_written": 0, "failed": 0}
+    with patch.object(e1_source_prepare, "prepare", lambda *a, **k: (None, None, 0)):
+        for path in paths:
+            try:
+                got = e1_source_prepare.prepare_sources(root, [path], day, budget_seconds=600)
+            except (UncertainRemote, CycleError):
+                raise  # remote trouble is never "one bad file"
+            except Exception:  # extraction/decoder failure of this one source
+                totals["failed"] += 1
+                continue
+            for key in ("extracted", "duplicates", "held"):
+                totals[key] += got[key]
+    totals["lotes_written"] = e1_source_prepare.prepare_sources(root, [], day)["lotes_written"]
+    return totals
+
+
 def run_cycle(root: Path, remote: Any, coordinator: str, *, day: str | None = None,
               api_key: str | None = None, responses: Any = None,
               pull: bool = True) -> dict[str, Any]:
@@ -305,7 +326,7 @@ def run_cycle(root: Path, remote: Any, coordinator: str, *, day: str | None = No
                 if hashlib.sha256(local.read_bytes()).hexdigest() != row["sha256"]:
                     raise CycleError("source_changed_during_download")
                 paths.append(local)
-            e1 = e1_source_prepare.prepare_sources(root, paths, day)
+            e1 = extract_each(root, paths, day)
         report.update({"e1_" + k: v for k, v in e1.items()})
 
         # E2: oldest ready lot without decisions (at most one per cycle).

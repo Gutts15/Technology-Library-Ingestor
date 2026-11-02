@@ -197,5 +197,23 @@ class CloudCycleTests(unittest.TestCase):
             cycle.run_cycle(self.tmp / "m", self.drive, "/tmp/bare.git")
 
 
+    def test_one_broken_source_does_not_block_the_others(self) -> None:
+        self.drop("a-new.txt", "Pixel Rig Tool enables rigging workflows for 2D sprites.\n")
+        self.drop("b-broken.txt", "this one crashes the decoder\n")
+        real = cycle.e1_source_prepare.extract_file
+
+        def flaky(source, *a, **k):
+            if b"crashes" in Path(source).read_bytes():
+                raise RuntimeError("decoder crashed")
+            return real(source, *a, **k)
+
+        with patch.object(cycle.e1_source_prepare, "extract_file", side_effect=flaky):
+            r = self.run_cycle("2026-11-01")
+        self.assertEqual((r["e1_extracted"], r["e1_failed"], r["e1_lotes_written"]), (1, 1, 1))
+        self.assertEqual(r["e3"], {"COMMITTED_RELEASED": 1})
+        r2 = self.run_cycle("2026-11-02")  # broken file retried, healthy one not
+        self.assertEqual((r2["drop_new"], r2["e1_extracted"]), (1, 1))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,7 +92,9 @@ def scan_file(path: Path, root: Path) -> list[str]:
                                      # passed to the existing e2 decide() only.
                                      Path("src/e123_cloud_cycle.py"),
                                      Path("src/e123_cycle_proof.py"),
-                                     Path(".github/workflows/e123-cycle-proof.yml")}
+                                     Path(".github/workflows/e123-cycle-proof.yml"),
+                                     # Marco 4 activation (reviewed in its PR).
+                                     Path(".github/workflows/e123-daily-cycle.yml")}
                     and not re.search(r"\bGOOGLE_API_KEY\b", text, re.IGNORECASE)):
                 continue
             findings.append(code)
