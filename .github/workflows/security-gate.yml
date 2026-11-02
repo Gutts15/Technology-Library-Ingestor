@@ -36,8 +36,16 @@ jobs:
       - name: Install local media qualification dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg tesseract-ocr poppler-utils > /dev/null
-          python3 -m pip install --quiet -r requirements-spreadsheet.txt
+          sudo apt-get install -y -qq ffmpeg tesseract-ocr poppler-utils fonts-dejavu-core > /dev/null
+          python3 -m pip install --quiet -r requirements-spreadsheet.txt Pillow==12.3.0
+          python3 - <<'PY'
+          import shutil
+          from pathlib import Path
+          import PIL
+          import openpyxl
+          assert all(shutil.which(tool) for tool in ('ffmpeg', 'tesseract', 'pdftotext'))
+          assert Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf').is_file()
+          PY
 
       - name: Qualify actual encoded files and local E1 E2 E3 integration
         run: python3 -m unittest tests.test_e1_source_extract tests.test_e1_source_prepare -q
