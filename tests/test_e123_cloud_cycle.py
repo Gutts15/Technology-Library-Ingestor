@@ -117,6 +117,9 @@ class CloudCycleTests(unittest.TestCase):
         self.saved_ops = coord._drive_ops
         coord._drive_ops = self.drive
         self.runs = 0
+        from unittest.mock import patch as _p
+        _g = _p("e2_gemini_decide.MIN_CALL_GAP_SECONDS", 0)
+        _g.start(); self.addCleanup(_g.stop)
 
     def tearDown(self) -> None:
         coord._drive_ops = self.saved_ops
