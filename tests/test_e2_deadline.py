@@ -54,7 +54,7 @@ class ModelDeadlineTests(unittest.TestCase):
         lot['items_sha256'] = hashlib.sha256(encode(lot['itens'])).hexdigest()
         (case.root / path).write_bytes(encode(lot))
         answer = {'decisoes': [case.decision(lot['itens'][0]['item_id'])]}
-        with patch.object(e2.time, 'monotonic', side_effect=[0, 0, 2]), \
+        with patch.object(e2.time, 'monotonic', side_effect=__import__('itertools').chain([0, 0], __import__('itertools').repeat(2))), \
              patch.object(e2, 'ask_gemini', return_value=answer):
             with self.assertRaisesRegex(e2.DecisionError, 'model_cycle_budget_exceeded'):
                 e2.decide(case.store, api_key='synthetic-placeholder', apply=True, max_seconds=1)
