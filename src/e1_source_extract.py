@@ -28,7 +28,7 @@ from evidence_quality import assess_evidence
 from ready_evidence_bridge import build_envelope, semantic_summary
 from text_document_ingest import DOCUMENT_SUFFIXES, TEXT_SUFFIXES
 
-MAX_INPUT_BYTES = 32 * 1024 * 1024
+MAX_INPUT_BYTES = 96 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_ARTIFACT_FILES = 4096
 MAX_SUMMARY_BYTES = 3072
@@ -37,6 +37,12 @@ SRC = Path(__file__).resolve().parent
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 AUDIO_SUFFIXES = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".wma"}
+
+
+# v2: cloud cycle transcribes speech (local faster-whisper). Bumping the
+# version gives new package/revision IDs so sources read by an older
+# extractor are re-read exactly once (see e1_source_prepare).
+EXTRACTOR_VERSION = 2
 
 
 class ExtractionError(Exception):
@@ -274,8 +280,8 @@ def extract_file(source: Path, destination: Path, *, budget_seconds: float = 120
     evidence_raw = encode(summary)
     if len(evidence_raw) > MAX_SUMMARY_BYTES:
         raise ExtractionError("summary_budget_exceeded")
-    package_id = hashlib.sha256(("e1-source-v1|" + kind + "|" + sha).encode()).hexdigest()[:20]
-    revision = hashlib.sha256(("e1-extraction-v1|" + sha).encode()).hexdigest()[:20]
+    package_id = hashlib.sha256(("e1-source-v" + str(EXTRACTOR_VERSION) + "|" + kind + "|" + sha).encode()).hexdigest()[:20]
+    revision = hashlib.sha256(("e1-extraction-v" + str(EXTRACTOR_VERSION) + "|" + sha).encode()).hexdigest()[:20]
     item = {"package_id": package_id, "revision_key": revision, "kind": kind,
             "evidence_path": f"99_INBOX/READY_FOR_ANALYSIS/{package_id}/evidence-summary.json",
             "detail_path": None, "preview_path": None}

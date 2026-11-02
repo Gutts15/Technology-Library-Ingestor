@@ -117,6 +117,9 @@ class CloudCycleTests(unittest.TestCase):
         self.saved_ops = coord._drive_ops
         coord._drive_ops = self.drive
         self.runs = 0
+        from unittest.mock import patch as _p
+        _g = _p("e2_gemini_decide.MIN_CALL_GAP_SECONDS", 0)
+        _g.start(); self.addCleanup(_g.stop)
 
     def tearDown(self) -> None:
         coord._drive_ops = self.saved_ops
@@ -213,6 +216,21 @@ class CloudCycleTests(unittest.TestCase):
         self.assertEqual(r["e3"], {"COMMITTED_RELEASED": 1})
         r2 = self.run_cycle("2026-11-02")  # broken file retried, healthy one not
         self.assertEqual((r2["drop_new"], r2["e1_extracted"]), (1, 1))
+
+
+    def test_newer_extractor_rereads_old_sources_once(self) -> None:
+        import e1_source_extract
+        self.drop("a-new.txt", "Pixel Rig Tool enables rigging workflows for 2D sprites.\n")
+        with patch.object(e1_source_extract, "EXTRACTOR_VERSION", 1), \
+             patch.object(cycle.e1_source_prepare, "EXTRACTOR_VERSION", 1):
+            r1 = self.run_cycle("2026-11-01")
+        self.assertEqual(r1["e1_extracted"], 1)
+        r2 = self.run_cycle("2026-11-02")  # v2: re-read once, new package
+        self.assertEqual((r2["drop_new"], r2["e1_extracted"]), (1, 1))
+        index = json.loads((self.drive.base / cycle.FILE_ROOT / "index.json").read_bytes())
+        self.assertEqual(len(index["items"]), 1)  # old package superseded, not duplicated
+        r3 = self.run_cycle("2026-11-03")
+        self.assertEqual((r3["drop_new"], r3["e1_extracted"]), (0, 0))
 
 
 if __name__ == "__main__":

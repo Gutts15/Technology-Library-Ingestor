@@ -203,8 +203,17 @@ def _write_markers(root: Path) -> None:
 
 
 def _known_sources(root: Path) -> set[str]:
+    """Sources already read by the CURRENT extractor version."""
     base = root / e1_source_prepare.RECEIPTS
-    return {p.stem for p in base.glob("*.json")} if base.is_dir() else set()
+    known = set()
+    for p in (base.glob("*.json") if base.is_dir() else []):
+        try:
+            version = json.loads(p.read_bytes()).get("extractor_version", 1)
+        except ValueError:
+            continue
+        if version >= e1_source_prepare.EXTRACTOR_VERSION:
+            known.add(p.stem)
+    return known
 
 
 def _lots(root: Path) -> list[str]:
@@ -274,6 +283,11 @@ def select_sources(remote: Any, known: set[str], limit: int) -> tuple[list[dict]
     return unique[:limit], stats
 
 
+def _whisper_model() -> Path | None:
+    value = os.environ.get("TL_WHISPER_MODEL")
+    return Path(value) if value else None
+
+
 def extract_each(root: Path, paths: list[Path], day: str) -> dict[str, int]:
     """One source per call, so a heavy or broken file cannot block the others
     forever: it simply has no receipt and is retried next cycle. The lot is
@@ -283,7 +297,8 @@ def extract_each(root: Path, paths: list[Path], day: str) -> dict[str, int]:
     with patch.object(e1_source_prepare, "prepare", lambda *a, **k: (None, None, 0)):
         for path in paths:
             try:
-                got = e1_source_prepare.prepare_sources(root, [path], day, budget_seconds=600)
+                got = e1_source_prepare.prepare_sources(
+                    root, [path], day, budget_seconds=600, local_whisper_model=_whisper_model())
             except (UncertainRemote, CycleError):
                 raise  # remote trouble is never "one bad file"
             except Exception:  # extraction/decoder failure of this one source

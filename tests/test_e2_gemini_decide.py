@@ -18,6 +18,9 @@ class TestE2(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.store = e2.DecisionStore(self.root)
+        from unittest.mock import patch as _p
+        _g = _p("e2_gemini_decide.MIN_CALL_GAP_SECONDS", 0)
+        _g.start(); self.addCleanup(_g.stop)
 
     def fixture(self, *, matches=None, evidence="React Bits provides React UI components."):
         pid = "0" * 19 + "1"

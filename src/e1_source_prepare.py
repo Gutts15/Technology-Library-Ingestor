@@ -18,7 +18,7 @@ from datetime import date
 from pathlib import Path
 
 from e1_lote_prepare import FILE_ROOT, Storage, encode, prepare, validate_index
-from e1_source_extract import MAX_INPUT_BYTES, ExtractionError, extract_file
+from e1_source_extract import EXTRACTOR_VERSION, MAX_INPUT_BYTES, ExtractionError, extract_file
 from e3_recovery_fixture import sync_write
 from ready_evidence_bridge import build_index
 
@@ -54,7 +54,7 @@ def rebuild(root: Path) -> tuple[list[dict], dict[str, dict]]:
     receipts = sorted(target(root, RECEIPTS).glob('*.json'))
     if len(receipts) > 200:
         raise SourcePreparationError('local_source_inventory_limit')
-    envelopes, known = [], {}
+    envelopes, known, superseded = [], {}, set()
     for path in receipts:
         if path.is_symlink() or path.stat().st_size > 4096:
             raise SourcePreparationError('local_receipt_invalid')
@@ -76,6 +76,9 @@ def rebuild(root: Path) -> tuple[list[dict], dict[str, dict]]:
             raise SourcePreparationError('local_receipt_binding_invalid')
         envelopes.append(env)
         known[sha] = row
+        for old_pid in row.get('supersedes', []):
+            if isinstance(old_pid, str):
+                superseded.add(old_pid)
     index = build_index(envelopes, [])
     validate_index(index)
     existing = target(root, FILE_ROOT + '/index.json')
@@ -86,7 +89,7 @@ def rebuild(root: Path) -> tuple[list[dict], dict[str, dict]]:
             raise SourcePreparationError('foreign_evidence_index')
         owned = {row['package_id']: row for row in index['items']}
         if any(row != {key: owned.get(row['package_id'], {}).get(key) for key in row}
-               for row in previous):
+               for row in previous if row['package_id'] not in superseded):
             # This marked mirror is not permission to discard older/native
             # evidence. Foreign entries need explicit integration, not reset.
             raise SourcePreparationError('foreign_evidence_index')
@@ -131,7 +134,7 @@ def _prepare_sources(root: Path, sources: list[Path], day: str, *, budget_second
                     or source.stat().st_size > MAX_INPUT_BYTES):
                 raise SourcePreparationError('source_invalid')
             sha = source_checksum(source)
-            if sha in known:
+            if sha in known and known[sha].get('extractor_version', 1) >= EXTRACTOR_VERSION:
                 stats['duplicates'] += 1
                 continue
             remaining = deadline - time.monotonic()
@@ -149,8 +152,18 @@ def _prepare_sources(root: Path, sources: list[Path], day: str, *, budget_second
                 persist(root, FILE_ROOT + '/' + pid + '.json', envelope_raw)
                 receipt = {'schema_version': 1, 'source_sha256': sha, 'package_id': pid,
                            'state': extracted.assessment['state'],
-                           'envelope_sha256': hashlib.sha256(envelope_raw).hexdigest()}
-                persist(root, RECEIPTS + '/' + sha + '.json', encode(receipt))
+                           'envelope_sha256': hashlib.sha256(envelope_raw).hexdigest(),
+                           'extractor_version': EXTRACTOR_VERSION}
+                previous = known.get(sha)
+                if previous is not None:
+                    # Re-read by a newer extractor: the old package leaves the
+                    # index (its files stay on Drive, nothing is deleted).
+                    chain = list(previous.get('supersedes', []))
+                    if previous['package_id'] != pid:
+                        chain.append(previous['package_id'])
+                    receipt['supersedes'] = chain
+                persist(root, RECEIPTS + '/' + sha + '.json', encode(receipt),
+                        replace=previous is not None)
                 stats['extracted'] += 1
                 stats['held'] += int(receipt['state'] == 'HELD')
                 known[sha] = receipt
