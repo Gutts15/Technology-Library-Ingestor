@@ -25,6 +25,129 @@ COORDINATOR_VERSION = "0.1.0"
 COORDINATOR_REF = "refs/heads/tl-candidate-production-coordinator"
 STATE_PATH = ".candidate-production-coordinator.json"
 
+# ---------------------------------------------------------------------------
+# Private Drive lease backend (Marco 2, approved by André 2026-11-01).
+#
+# remote_url "drive-lease:<rclone-dir>" keeps the same tiny JSON state in the
+# private Drive instead of a public GitHub ref, so the production job needs no
+# repository write permission. The observed "sha" is the SHA-256 of the exact
+# state bytes. Mutual exclusion between runs is provided by the GitHub Actions
+# concurrency group (one writer, no cancel-in-progress); this backend adds the
+# same exact-owner/generation compare-before-write and post-write readback as
+# the Git backend. A write with uncertain outcome is never retried: callers
+# re-read and compare, exactly like a lost Git push acknowledgement.
+# ---------------------------------------------------------------------------
+DRIVE_LEASE_PREFIX = "drive-lease:"
+DRIVE_STATE_NAME = "production-coordinator-state.json"
+_DRIVE_MARKER = ".drive-lease-remote"
+
+
+def _is_drive(remote_url: str) -> bool:
+    return isinstance(remote_url, str) and remote_url.startswith(DRIVE_LEASE_PREFIX)
+
+
+def _drive_path(remote_url: str) -> str:
+    base = remote_url[len(DRIVE_LEASE_PREFIX):].rstrip("/")
+    return f"{base}/{DRIVE_STATE_NAME}"
+
+
+class _RcloneOps:
+    """Bounded rclone calls; stderr is never surfaced (public logs)."""
+
+    def _run(self, args: list[str], data: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
+        command = ["rclone", *args, "--log-level", "ERROR", "--retries", "1",
+                   "--low-level-retries", "1", "--contimeout", "10s", "--timeout", "30s"]
+        try:
+            return subprocess.run(command, input=data, capture_output=True, timeout=60, check=False)
+        except (subprocess.TimeoutExpired, OSError):
+            return subprocess.CompletedProcess(command, 124, b"", b"")
+
+    def read(self, path: str) -> bytes | None | bool:
+        """bytes when present, False when absent, None when unreachable."""
+        listed = self._run(["lsjson", path])
+        if listed.returncode == 3 or (listed.returncode == 0 and listed.stdout.strip() in (b"", b"[]")):
+            return False
+        if listed.returncode != 0:
+            return None
+        got = self._run(["cat", path, "--count", "65536"])
+        return got.stdout if got.returncode == 0 else None
+
+    def write(self, path: str, data: bytes) -> bool:
+        return self._run(["rcat", path], data).returncode == 0
+
+
+_drive_ops: Any = _RcloneOps()
+
+
+def _drive_token(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def _drive_ls(remote_url: str) -> str | None:
+    data = _drive_ops.read(_drive_path(remote_url))
+    if data is None:
+        return None
+    if data is False:
+        return ""
+    return _drive_token(data)
+
+
+def _drive_read_state(remote_url: str) -> tuple[str | None, dict[str, Any] | None, list[str]]:
+    data = _drive_ops.read(_drive_path(remote_url))
+    if data is None:
+        return None, None, ["coordinator_remote_unreachable"]
+    if data is False:
+        return "", None, ["coordinator_ref_missing"]
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeError):
+        return None, None, ["coordinator_read_invalid_json"]
+    errors = validate_state(payload if isinstance(payload, dict) else None)
+    return _drive_token(data), payload if isinstance(payload, dict) else None, errors
+
+
+def _drive_bytes(state: dict[str, Any]) -> bytes:
+    return (json.dumps(_payload(state), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
+def _drive_ensure_initialized(remote_url: str) -> tuple[str | None, dict[str, Any] | None, list[str]]:
+    existing = _drive_ls(remote_url)
+    if existing is None:
+        return None, None, ["coordinator_remote_unreachable"]
+    if existing:
+        return _drive_read_state(remote_url)
+    seed = _drive_bytes({
+        "state": "FREE", "transaction_id": None, "batch_id": None, "owner": None,
+        "journal_path": None, "generation": 0, "canonical_write_performed": False,
+        "release_reason": None,
+    })
+    _drive_ops.write(_drive_path(remote_url), seed)
+    # Outcome may be uncertain: accept only a valid state observed by readback.
+    return _drive_read_state(remote_url)
+
+
+def _drive_prepare(remote_url: str, base_sha: str, state: dict[str, Any]) -> tuple[Path | None, str | None, list[str]]:
+    observed = _drive_ls(remote_url)
+    if observed is None:
+        return None, None, ["coordinator_state_fetch_failed"]
+    if observed != base_sha:
+        return None, None, ["coordinator_state_base_changed"]
+    temp = Path(tempfile.mkdtemp(prefix="tl-production-coordinator-drive-"))
+    data = _drive_bytes(state)
+    (temp / STATE_PATH).write_bytes(data)
+    (temp / _DRIVE_MARKER).write_text(remote_url, encoding="utf-8")
+    return temp, _drive_token(data), []
+
+
+def _drive_push(work: Path, expected_sha: str) -> bool:
+    remote_url = (work / _DRIVE_MARKER).read_text(encoding="utf-8")
+    # Compare immediately before the single write; never retry an uncertain write.
+    if _drive_ls(remote_url) != expected_sha:
+        return False
+    return _drive_ops.write(_drive_path(remote_url), (work / STATE_PATH).read_bytes())
+
+
 
 def git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     # Every Git transport boundary must be bounded. A timed-out push has an
@@ -45,6 +168,8 @@ def git(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess
 
 
 def ls_remote(remote_url: str) -> str | None:
+    if _is_drive(remote_url):
+        return _drive_ls(remote_url)
     result = git(["ls-remote", remote_url, COORDINATOR_REF])
     if result.returncode != 0:
         return None
@@ -100,6 +225,8 @@ def validate_state(payload: dict[str, Any] | None) -> list[str]:
 
 
 def read_state(remote_url: str) -> tuple[str | None, dict[str, Any] | None, list[str]]:
+    if _is_drive(remote_url):
+        return _drive_read_state(remote_url)
     observed = ls_remote(remote_url)
     if observed is None:
         return None, None, ["coordinator_remote_unreachable"]
@@ -130,6 +257,8 @@ def read_state(remote_url: str) -> tuple[str | None, dict[str, Any] | None, list
 
 
 def ensure_initialized(remote_url: str) -> tuple[str | None, dict[str, Any] | None, list[str]]:
+    if _is_drive(remote_url):
+        return _drive_ensure_initialized(remote_url)
     if not shutil.which("git"):
         return None, None, ["git_missing"]
     existing = ls_remote(remote_url)
@@ -178,6 +307,8 @@ def _prepare_transition(
     *,
     message: str,
 ) -> tuple[Path | None, str | None, list[str]]:
+    if _is_drive(remote_url):
+        return _drive_prepare(remote_url, base_sha, state)
     temp = Path(tempfile.mkdtemp(prefix="tl-production-coordinator-state-"))
     if git(["init"], temp).returncode != 0:
         shutil.rmtree(temp, ignore_errors=True)
@@ -211,6 +342,8 @@ def _prepare_transition(
 
 
 def _push_expected(work: Path, expected_sha: str) -> bool:
+    if (work / _DRIVE_MARKER).exists():
+        return _drive_push(work, expected_sha)
     result = git(
         [
             "push",
