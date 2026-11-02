@@ -368,6 +368,27 @@ class DecisionStore(Storage):
         return None
 
 
+def hold_decision(item: dict) -> dict:
+    return {"item_id": item["item_id"], "acao": "HOLD", "motivo": "MODEL_UNCERTAIN",
+            "confianca": 0, "record_type": None, "route": None,
+            "target_record_id": None, "record_markdown": None, "claims": []}
+
+
+def checked_or_hold(item: dict, reply: Any) -> dict:
+    """Spec 4: when in doubt, HOLD. A model answer that breaks the contract
+    or is not grounded becomes HOLD for that item instead of blocking the lot
+    forever (and burning free-tier quota on daily retries)."""
+    try:
+        if not isinstance(reply, dict) or set(reply) != {"decisoes"}:
+            raise DecisionError("model_contract_invalid")
+        rows = reply["decisoes"]
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise DecisionError("model_item_count_invalid")
+        return validate_decision(item, rows[0])
+    except DecisionError:
+        return hold_decision(item)
+
+
 def decide(store: DecisionStore, *, responses: Any | None = None,
            api_key: str | None = None, apply: bool = False,
            max_seconds: float = MAX_CYCLE_SECONDS) -> tuple[int, int]:
@@ -387,13 +408,9 @@ def decide(store: DecisionStore, *, responses: Any | None = None,
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise DecisionError("model_cycle_budget_exceeded")
+            # Transport/quota failures still abort (the lot waits for the next cycle).
             reply = ask_gemini(item, api_key, timeout=min(60, remaining))
-            if not isinstance(reply, dict) or set(reply) != {"decisoes"}:
-                raise DecisionError("model_contract_invalid")
-            decisions = reply["decisoes"]
-            if not isinstance(decisions, list) or len(decisions) != 1:
-                raise DecisionError("model_item_count_invalid")
-            replies.extend(decisions)
+            replies.append(checked_or_hold(item, reply))
         responses = {"decisoes": replies}
     file = build_decision_file(raw, relative, responses)
     target = LOTES + "/" + relative.replace("lote", "decisoes", 1)
