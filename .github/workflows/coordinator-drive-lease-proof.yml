@@ -1,0 +1,47 @@
+name: Marco 2 Drive lease coordinator proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/coordinator-drive-lease-proof.yml'
+      - 'src/coordinator_drive_lease_proof.py'
+      - 'src/candidate_production_coordinator.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-private-storage-ingest
+  cancel-in-progress: false
+
+jobs:
+  lease_proof:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install remote storage client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq >/dev/null 2>&1
+          sudo apt-get install -y -qq rclone >/dev/null 2>&1
+
+      - name: Configure Drive client
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TL_RCLONE_CONFIG:-}" ]; then echo "lease_proof status=SECRET_MISSING"; exit 2; fi
+          umask 077
+          printf '%s' "$TL_RCLONE_CONFIG" > "$RUNNER_TEMP/tl-rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/tl-rclone.conf" >> "$GITHUB_ENV"
+
+      - name: Prove lease over real private Drive (synthetic prefix only)
+        run: python3 src/coordinator_drive_lease_proof.py
