@@ -1,0 +1,54 @@
+name: Technology Library daily cycle (E1-E2-E3)
+
+on:
+  schedule:
+    - cron: '41 9 * * *' # 06:41 America/Sao_Paulo
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-private-storage-ingest
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned rclone and local decoders
+        run: |
+          set -euo pipefail
+          v=v1.68.2
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/rclone/rclone/releases/download/$v/rclone-$v-linux-amd64.deb"
+          curl -fsSLO "https://github.com/rclone/rclone/releases/download/$v/SHA256SUMS"
+          grep " rclone-$v-linux-amd64.deb\$" SHA256SUMS | sha256sum -c - >/dev/null
+          sudo dpkg -i "rclone-$v-linux-amd64.deb" >/dev/null
+          sudo apt-get update -qq >/dev/null 2>&1
+          sudo apt-get install -y -qq ffmpeg tesseract-ocr tesseract-ocr-por poppler-utils fonts-dejavu-core >/dev/null 2>&1
+          python3 -m pip install --quiet -r "$GITHUB_WORKSPACE/requirements-spreadsheet.txt" Pillow==12.3.0
+
+      - name: Configure Drive client
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TL_RCLONE_CONFIG:-}" ]; then echo "e123_cycle status=SECRET_MISSING"; exit 2; fi
+          umask 077
+          printf '%s' "$TL_RCLONE_CONFIG" > "$RUNNER_TEMP/tl-rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/tl-rclone.conf" >> "$GITHUB_ENV"
+
+      - name: One cycle over the real library
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cd "$RUNNER_TEMP"
+          python3 "$GITHUB_WORKSPACE/src/e123_cloud_cycle.py"
