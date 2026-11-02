@@ -228,7 +228,12 @@ def _ask_gemini_http(item: dict, api_key: str) -> dict:
                         "Never CREATE when matches are present; UPDATE only a matched RECORD_ID. "
                         "Use the suggested_record_id for CREATE; do not invent a different ID. "
                         "Use one of TECHNOLOGY, PATTERN, PIPELINE, SOURCE, RESEARCH for record_type. "
-                        "Route as DOMAIN/CATEGORY. Avoid fictional sources and unsupported claims."),
+                        "route is DOMAIN/CATEGORY in UPPERCASE with underscores, DOMAIN numbered like "
+                        "02_WEB_DEVELOPMENT and CATEGORY like UI_COMPONENTS (example "
+                        "02_WEB_DEVELOPMENT/UI_COMPONENTS); SOURCE records use SOURCES/<CATEGORY>, "
+                        "RESEARCH records use RESEARCH/<CATEGORY>. The record_markdown header lines "
+                        "DOMAIN and CATEGORY must equal the two route parts. confianca is a number "
+                        "between 0 and 1. Avoid fictional sources and unsupported claims."),
         "item": {
             "item_id": item["item_id"], "kind": item["kind"],
             "suggested_record_id": expected_record_id(item["item_id"]),
@@ -378,6 +383,24 @@ def hold_decision(item: dict) -> dict:
 HOLD_CODES: dict[str, int] = {}
 
 
+def _record_fault(reply: Any) -> str:
+    """Which fixed rule a CREATE/UPDATE broke (labels only, no content)."""
+    try:
+        d = reply["decisoes"][0]
+    except (KeyError, IndexError, TypeError):
+        return "shape"
+    c = d.get("confianca")
+    if d.get("motivo") is not None:
+        return "motivo"
+    if type(c) not in (int, float) or c < 0.8:
+        return "confidence"
+    if d.get("record_type") not in ALLOWED_TYPES:
+        return "type"
+    if not isinstance(d.get("route"), str) or not ROUTE.fullmatch(d["route"]):
+        return "route"
+    return "markdown"
+
+
 def checked_or_hold(item: dict, reply: Any) -> dict:
     """Spec 4: when in doubt, HOLD. A model answer that breaks the contract
     or is not grounded becomes HOLD for that item instead of blocking the lot
@@ -390,7 +413,10 @@ def checked_or_hold(item: dict, reply: Any) -> dict:
             raise DecisionError("model_item_count_invalid")
         return validate_decision(item, rows[0])
     except DecisionError as exc:
-        HOLD_CODES[str(exc)] = HOLD_CODES.get(str(exc), 0) + 1
+        code = str(exc)
+        if code == "record_decision_invalid":
+            code += ":" + _record_fault(reply)
+        HOLD_CODES[code] = HOLD_CODES.get(code, 0) + 1
         return hold_decision(item)
 
 

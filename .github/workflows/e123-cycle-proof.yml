@@ -8,6 +8,7 @@ on:
       - '.github/workflows/e123-cycle-proof.yml'
       - 'src/e123_cloud_cycle.py'
       - 'src/e123_cycle_proof.py'
+      - 'src/e2_gemini_decide.py'
 
 permissions:
   contents: read
