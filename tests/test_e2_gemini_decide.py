@@ -181,5 +181,12 @@ class TestE2(unittest.TestCase):
                 e2.decide(self.store, api_key="k", apply=True)
         self.assertFalse((self.root / LOTES / "2026-10-27/decisoes.json").exists())
 
+    def test_unparseable_model_answer_holds_item(self):
+        from unittest.mock import patch
+        self.fixture()
+        with patch.object(e2, "ask_gemini", side_effect=e2.DecisionError("model_response_invalid")):
+            self.assertEqual(e2.decide(self.store, api_key="k", apply=True), (1, 1))
+
+
 if __name__ == "__main__":
     unittest.main()

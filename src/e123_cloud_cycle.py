@@ -333,6 +333,8 @@ def run_cycle(root: Path, remote: Any, coordinator: str, *, day: str | None = No
         count, written = decide(DecisionStore(root), responses=responses,
                                 api_key=api_key, apply=True)
         report["e2_decisions"], report["e2_written"] = count, written
+        import e2_gemini_decide
+        report["e2_hold_codes"] = dict(e2_gemini_decide.HOLD_CODES)
 
         # E3: settle every lot that has decisions but no terminal receipt.
         outcomes: dict[str, int] = {}
