@@ -160,5 +160,26 @@ class TestE2(unittest.TestCase):
             e2.validate_lote(encode(lote), "2026-10-27/lote.json")
 
 
+    def test_invalid_live_model_answer_becomes_hold_not_blocked_lot(self):
+        from unittest.mock import patch
+        lote, _ = self.fixture()
+        iid = lote["itens"][0]["item_id"]
+        bad = {"decisoes": [self.decision(iid, "CREATE", None, confianca=0.95,
+               record_type="TECHNOLOGY", route="02_WEB_DEVELOPMENT/UI_COMPONENTS",
+               record_markdown="no headers", claims=[])]}
+        with patch.object(e2, "ask_gemini", return_value=bad):
+            self.assertEqual(e2.decide(self.store, api_key="k", apply=True), (1, 1))
+        import json
+        out = json.loads((self.root / LOTES / "2026-10-27/decisoes.json").read_bytes())
+        self.assertEqual((out["decisoes"][0]["acao"], out["decisoes"][0]["motivo"]), ("HOLD", "MODEL_UNCERTAIN"))
+
+    def test_transport_failure_still_aborts(self):
+        from unittest.mock import patch
+        self.fixture()
+        with patch.object(e2, "ask_gemini", side_effect=e2.DecisionError("model_http_429")):
+            with self.assertRaises(e2.DecisionError):
+                e2.decide(self.store, api_key="k", apply=True)
+        self.assertFalse((self.root / LOTES / "2026-10-27/decisoes.json").exists())
+
 if __name__ == "__main__":
     unittest.main()

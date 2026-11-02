@@ -75,7 +75,8 @@ def main() -> int:
         print("e123_proof status=UNCERTAIN_STOPPED")
         return cycle.EXIT_UNCERTAIN
     except Exception as exc:
-        print("e123_proof status=BLOCKED code=" + (str(exc) if isinstance(exc, cycle.CycleError) else type(exc).__name__))
+        print("e123_proof status=BLOCKED code=" + (str(exc) if type(exc).__name__ in {"CycleError", "DecisionError", "SourcePreparationError",
+                                              "CommitFixtureError", "PreparationError"} else type(exc).__name__))
         return 2
     if ok:
         purge = remote._run(["purge", "tl:" + prefix], timeout=300)
