@@ -33,8 +33,17 @@ jobs:
       - name: Test E1 lot assembler with synthetic evidence only
         run: python3 -m unittest tests.test_e1_lote_prepare -q
 
+      - name: Install local media qualification dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg tesseract-ocr poppler-utils > /dev/null
+          python3 -m pip install --quiet -r requirements-spreadsheet.txt
+
+      - name: Qualify actual encoded files and local E1 E2 E3 integration
+        run: python3 -m unittest tests.test_e1_source_extract tests.test_e1_source_prepare -q
+
       - name: Test isolated E2 decisions with synthetic evidence only
-        run: python3 -m unittest tests.test_e2_gemini_decide tests.test_cost_guardrail_g03b -q
+        run: python3 -m unittest tests.test_e2_gemini_decide tests.test_e2_deadline tests.test_cost_guardrail_g03b -q
 
       - name: Test E3 in-memory transaction simulation with synthetic records
         run: python3 -m unittest tests.test_e3_transaction_preflight -q
@@ -89,6 +98,11 @@ jobs:
 
       - name: Enforce zero-additional-cost source guardrail
         run: python3 src/cost_guardrail.py
+
+      - name: Run complete Python regression suite without external credentials
+        env:
+          PYTHONPATH: src:tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -q
 
       - name: Confirm no generated workspace changes
         run: test -z "$(git status --porcelain)"

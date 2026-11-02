@@ -1,6 +1,6 @@
 {
   "project": "Technology Library",
-  "charter_version": "1.0",
+  "charter_version": "1.1",
   "project_status": "IN_PROGRESS",
   "core_release": "Technology-Library-Ingestor v1.0.0",
   "north_star": "Drop interesting material into the private Drive inbox and walk away; the system autonomously filters, processes, consolidates, safely promotes and indexes useful knowledge for later retrieval.",
@@ -35,7 +35,33 @@
     "automatic index rebuild and verification",
     "automatic ordinary failure recovery",
     "selective retrieval of resulting knowledge",
-    "500-item mixed-backlog black-box acceptance pass",
+    "seven consecutive real scheduled days black-box acceptance pass",
     "zero routine manual validation"
-  ]
+  ],
+  "scope_revision": {
+    "from_charter_version": "1.0",
+    "to_charter_version": "1.1",
+    "change": "Replace the V1 500-input scale test with specification V1.2.0 section 7 seven-day real acceptance; preserve North Star and all hard constraints.",
+    "owner_approval": "Owner-approved V1.2.0 specification (2026-10-19), explicitly reaffirmed for formal reconciliation by executive resumption request (2026-11-01).",
+    "scale_test": "OUTSIDE_V1"
+  },
+  "v1_acceptance": {
+    "specification_version": "1.2.0",
+    "real_execution_required": true,
+    "consecutive_days": 7,
+    "drive_credential_age_days_exclusive_minimum": 8,
+    "required_cases": [
+      "empty_day",
+      "create_and_routed_retrieval",
+      "update_preserves_identity_and_valid_content",
+      "duplicate_unchanged_without_reanalysis",
+      "irrelevant_reject",
+      "weak_evidence_hold",
+      "failure_and_next_cycle_recovery",
+      "credential_lifetime_without_manual_renewal",
+      "public_logs_and_artifacts_private"
+    ],
+    "scale_test_required": false
+  },
+  "acceptance_evidence": null
 }
