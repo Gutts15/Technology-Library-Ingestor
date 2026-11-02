@@ -87,7 +87,12 @@ def scan_file(path: Path, root: Path) -> list[str]:
             if (code == "gemini_api_secret"
                     and relative in {Path(".github/workflows/g03b-gemini-receipt.yml"),
                                      Path("src/e2_gemini_decide.py"),
-                                     Path(".github/workflows/e2-synthetic-gemini-smoke.yml")}
+                                     Path(".github/workflows/e2-synthetic-gemini-smoke.yml"),
+                                     # Marco 3 (reviewed in PR #32): same free-tier E2 key,
+                                     # passed to the existing e2 decide() only.
+                                     Path("src/e123_cloud_cycle.py"),
+                                     Path("src/e123_cycle_proof.py"),
+                                     Path(".github/workflows/e123-cycle-proof.yml")}
                     and not re.search(r"\bGOOGLE_API_KEY\b", text, re.IGNORECASE)):
                 continue
             findings.append(code)

@@ -48,7 +48,7 @@ jobs:
           PY
 
       - name: Qualify actual encoded files and local E1 E2 E3 integration
-        run: python3 -m unittest tests.test_e1_source_extract tests.test_e1_source_prepare -q
+        run: python3 -m unittest tests.test_e1_source_extract tests.test_e1_source_prepare tests.test_coordinator_drive_lease tests.test_e123_cloud_cycle -q
 
       - name: Test isolated E2 decisions with synthetic evidence only
         run: python3 -m unittest tests.test_e2_gemini_decide tests.test_e2_deadline tests.test_cost_guardrail_g03b -q

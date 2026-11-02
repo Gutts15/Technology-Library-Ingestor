@@ -1,0 +1,57 @@
+name: Marco 3 E1-E2-E3 cloud cycle proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/e123-cycle-proof.yml'
+      - 'src/e123_cloud_cycle.py'
+      - 'src/e123_cycle_proof.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technology-library-private-storage-ingest
+  cancel-in-progress: false
+
+jobs:
+  cycle_proof:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned rclone (Drive SHA-256 hashes) and decoders
+        run: |
+          set -euo pipefail
+          v=v1.68.2
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/rclone/rclone/releases/download/$v/rclone-$v-linux-amd64.deb"
+          curl -fsSLO "https://github.com/rclone/rclone/releases/download/$v/SHA256SUMS"
+          grep " rclone-$v-linux-amd64.deb\$" SHA256SUMS | sha256sum -c - >/dev/null
+          sudo dpkg -i "rclone-$v-linux-amd64.deb" >/dev/null
+          sudo apt-get update -qq >/dev/null 2>&1
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-por poppler-utils >/dev/null 2>&1 || true
+
+      - name: Configure Drive client
+        env:
+          TL_RCLONE_CONFIG: ${{ secrets.TL_RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TL_RCLONE_CONFIG:-}" ]; then echo "e123_proof status=SECRET_MISSING"; exit 2; fi
+          umask 077
+          printf '%s' "$TL_RCLONE_CONFIG" > "$RUNNER_TEMP/tl-rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/tl-rclone.conf" >> "$GITHUB_ENV"
+
+      - name: Full cycle on real Drive + real Gemini (synthetic prefix only)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cd "$RUNNER_TEMP"
+          python3 "$GITHUB_WORKSPACE/src/e123_cycle_proof.py"
