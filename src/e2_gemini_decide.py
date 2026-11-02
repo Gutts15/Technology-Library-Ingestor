@@ -28,7 +28,7 @@ MAX_DECISIONS = 20
 MAX_DECISION_FILE = 400 * 1024
 MAX_MARKDOWN = 12000
 MAX_PROMPT_BYTES = 7500
-MAX_CYCLE_SECONDS = 300
+MAX_CYCLE_SECONDS = 600
 ALLOWED_ACTIONS = {"CREATE", "UPDATE", "UNCHANGED", "REJECT", "HOLD"}
 ALLOWED_TYPES = {"TECHNOLOGY", "PATTERN", "PIPELINE", "SOURCE", "RESEARCH"}
 REASON_CODES = {"DUPLICATE", "IRRELEVANT", "WEAK_EVIDENCE", "CONFLICT",
@@ -427,6 +427,33 @@ def checked_or_hold(item: dict, reply: Any) -> dict:
         return hold_decision(item)
 
 
+# Free tier is rate limited per minute: space calls and retry a 429 once.
+MIN_CALL_GAP_SECONDS = 7.0
+QUOTA_RETRY_WAIT_SECONDS = 35.0
+_last_call = [0.0]
+
+
+def paced_ask(item: dict, api_key: str, deadline: float) -> dict:
+    for attempt in (0, 1):
+        wait = _last_call[0] + MIN_CALL_GAP_SECONDS - time.monotonic()
+        if attempt:
+            wait = max(wait, QUOTA_RETRY_WAIT_SECONDS)
+        if wait > 0:
+            if time.monotonic() + wait >= deadline - 5:
+                raise DecisionError("model_cycle_budget_exceeded")
+            time.sleep(wait)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise DecisionError("model_cycle_budget_exceeded")
+        _last_call[0] = time.monotonic()
+        try:
+            return ask_gemini(item, api_key, timeout=min(60, remaining))
+        except DecisionError as exc:
+            if str(exc) != "model_quota_blocked" or attempt:
+                raise
+    raise DecisionError("model_quota_blocked")
+
+
 def decide(store: DecisionStore, *, responses: Any | None = None,
            api_key: str | None = None, apply: bool = False,
            max_seconds: float = MAX_CYCLE_SECONDS) -> tuple[int, int]:
@@ -448,7 +475,7 @@ def decide(store: DecisionStore, *, responses: Any | None = None,
                 raise DecisionError("model_cycle_budget_exceeded")
             # Transport/quota failures still abort (the lot waits for the next cycle).
             try:
-                reply = ask_gemini(item, api_key, timeout=min(60, remaining))
+                reply = paced_ask(item, api_key, deadline)
             except DecisionError as exc:
                 # Deterministic per item (temperature 0): retrying tomorrow
                 # gives the same answer, so HOLD the item instead of blocking
