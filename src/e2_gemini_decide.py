@@ -449,7 +449,9 @@ def paced_ask(item: dict, api_key: str, deadline: float) -> dict:
         try:
             return ask_gemini(item, api_key, timeout=min(60, remaining))
         except DecisionError as exc:
-            if str(exc) != "model_quota_blocked" or attempt:
+            # One retry for a 429 or a slow answer; transient on free tier.
+            if str(exc) not in {"model_quota_blocked", "model_deadline_exceeded",
+                                "model_network_failed"} or attempt:
                 raise
     raise DecisionError("model_quota_blocked")
 
