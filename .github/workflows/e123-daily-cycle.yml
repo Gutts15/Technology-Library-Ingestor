@@ -35,6 +35,19 @@ jobs:
           sudo apt-get update -qq >/dev/null 2>&1
           sudo apt-get install -y -qq ffmpeg tesseract-ocr tesseract-ocr-por poppler-utils fonts-dejavu-core >/dev/null 2>&1
           python3 -m pip install --quiet -r "$GITHUB_WORKSPACE/requirements-spreadsheet.txt" Pillow==12.3.0
+          python3 -m pip install --quiet -r "$GITHUB_WORKSPACE/requirements-transcription.txt"
+
+      - name: Fetch local speech model (free, runs on the runner CPU)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          path = snapshot_download("Systran/faster-whisper-small",
+                                   local_dir=os.environ["RUNNER_TEMP"] + "/whisper-small")
+          assert os.path.isfile(path + "/model.bin")
+          PY
+          echo "TL_WHISPER_MODEL=$RUNNER_TEMP/whisper-small" >> "$GITHUB_ENV"
 
       - name: Configure Drive client
         env:

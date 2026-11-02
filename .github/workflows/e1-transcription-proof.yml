@@ -1,0 +1,42 @@
+name: E1 speech transcription proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/e1-transcription-proof.yml'
+      - 'src/e1_transcription_proof.py'
+      - 'src/e1_source_extract.py'
+
+permissions:
+  contents: read
+
+jobs:
+  transcription_proof:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout reviewed code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install decoders, TTS and speech model
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq >/dev/null 2>&1
+          sudo apt-get install -y -qq ffmpeg tesseract-ocr tesseract-ocr-por espeak-ng >/dev/null 2>&1
+          python3 -m pip install --quiet -r requirements-transcription.txt
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          snapshot_download("Systran/faster-whisper-small", local_dir=os.environ["RUNNER_TEMP"] + "/whisper-small")
+          PY
+          echo "TL_WHISPER_MODEL=$RUNNER_TEMP/whisper-small" >> "$GITHUB_ENV"
+
+      - name: Spoken synthetic video becomes transcript evidence
+        run: |
+          cd "$RUNNER_TEMP"
+          python3 "$GITHUB_WORKSPACE/src/e1_transcription_proof.py"
