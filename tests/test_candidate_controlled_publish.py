@@ -105,7 +105,15 @@ def verify_final_destination_mime() -> None:
             writer = publisher.canonical_atomic_writer(
                 "fixture:", "99_INBOX/CANDIDATES/PRODUCTION_RECOVERY/synthetic/run"
             )
-            assert not writer("00_LIBRARY/record.md", raw)
+            # Since PR #26 a failed copy/move is an UNCERTAIN remote outcome:
+            # the writer must fail closed (exit 75), never report a clean False.
+            from candidate_remote_recovery_probe import RemoteUncertainExit
+            try:
+                writer("00_LIBRARY/record.md", raw)
+            except RemoteUncertainExit:
+                pass
+            else:
+                raise AssertionError("uncertain write must raise RemoteUncertainExit")
         assert "fixture:00_LIBRARY/record.md" not in failing.objects
         if operation == "copyto":
             assert "moveto" not in failing.operations
